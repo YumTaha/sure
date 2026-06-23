@@ -121,13 +121,16 @@ class PlaidItem < ApplicationRecord
     supported_products.include?(product)
   end
 
-  # Returns the list of products this item has consented to but may not yet have billed/available.
-  # Reads from the stored Plaid item snapshot first (raw_payload["consented_products"]).
-  # Falls back to a region-derived set: EU items consent to transactions only; all others
-  # consent to all SUPPORTED_PLAID_PRODUCTS (as set by additional_consented_products at link time).
   def consented_products
-    from_snapshot = raw_payload.is_a?(Hash) ? raw_payload["consented_products"] : raw_payload&.consented_products rescue nil
-    return Array(from_snapshot) if from_snapshot.present?
+    from_snapshot =
+      if raw_payload.is_a?(Hash)
+        raw_payload["consented_products"]
+      elsif raw_payload.respond_to?(:consented_products)
+        raw_payload.consented_products
+      end
+
+    products = Array(from_snapshot)
+    return products if products.present?
 
     eu? ? [ "transactions" ] : Provider::Plaid::SUPPORTED_PLAID_PRODUCTS
   end
