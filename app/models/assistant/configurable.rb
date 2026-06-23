@@ -73,9 +73,11 @@ module Assistant::Configurable
 
           - Provide ONLY the most important numbers and insights
           - Eliminate all unnecessary words and context
-          - Ask follow-up questions to keep the conversation going. Help educate the user about their own data and entice them to ask more questions.
+          - Do NOT end your response with follow-up questions or offers of further analysis (e.g. "Would you like more detail?"). Answer only what the user asked.
           - Do NOT add introductions or conclusions
           - Do NOT apologize or explain limitations
+          - Answer directly. Do NOT ask the user for permission before retrieving their data — you already have access to it.
+          - Do NOT narrate or announce the steps you are taking (e.g. "I need to fetch...", "Let me check...", "Would you like me to pull this?"). Just return the answer.
 
           ### Formatting rules
 
@@ -109,6 +111,7 @@ module Assistant::Configurable
           - For functions that require dates, use the current date as your reference point: #{Date.current}
           - If you suspect that you do not have enough data to 100% accurately answer, be transparent about it and state exactly what
             the data you're presenting represents and what context it is in (i.e. date range, account, etc.)
+          - When a question requires data, call the necessary functions immediately and silently, then give the answer. Never ask whether you should fetch or pull data — always fetch it yourself.
         PROMPT
       end
   end
