@@ -4,6 +4,10 @@ class MessagesController < ApplicationController
   before_action :set_chat
 
   def create
+    if @chat.assistant_responding?
+      return redirect_to chat_path(@chat), alert: t("messages.create.assistant_busy")
+    end
+
     @message = UserMessage.new(
       chat: @chat,
       content: message_params[:content],
