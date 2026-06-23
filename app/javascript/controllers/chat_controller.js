@@ -50,12 +50,12 @@ export default class extends Controller {
   }
 
   pendingResponseTargetConnected() {
-    this.#responding = true;
+    this.#responding = this.hasPendingResponseTarget;
     this.#updateSubmitState();
   }
 
   pendingResponseTargetDisconnected() {
-    this.#responding = false;
+    this.#responding = this.hasPendingResponseTarget;
     this.#updateSubmitState();
   }
 
