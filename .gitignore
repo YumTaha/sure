@@ -131,3 +131,15 @@ logs/security/
 # Ignore Playwright artifacts
 playwright-report/
 .playwright-mcp
+
+# --- Extra secret-artifact safety (public fork) ---
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+id_rsa*
+*.sqlite3
+*.sql
+*.dump
+*credentials*.json
