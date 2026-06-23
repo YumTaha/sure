@@ -1,7 +1,9 @@
 import { Controller } from "@hotwired/stimulus";
 
 export default class extends Controller {
-  static targets = ["messages", "form", "input", "submit"];
+  static targets = ["messages", "form", "input", "submit", "pendingResponse"];
+
+  #responding = false;
 
   connect() {
     this.#configureAutoScroll();
@@ -28,6 +30,7 @@ export default class extends Controller {
   }
 
   submitSampleQuestion(e) {
+    if (this.#responding) return;
     this.inputTarget.value = e.target.dataset.chatQuestionParam;
     this.#updateSubmitState();
 
@@ -40,10 +43,20 @@ export default class extends Controller {
   handleInputKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (this.#hasContent()) {
+      if (this.#hasContent() && !this.#responding) {
         this.formTarget.requestSubmit();
       }
     }
+  }
+
+  pendingResponseTargetConnected() {
+    this.#responding = true;
+    this.#updateSubmitState();
+  }
+
+  pendingResponseTargetDisconnected() {
+    this.#responding = false;
+    this.#updateSubmitState();
   }
 
   #hasContent() {
@@ -52,7 +65,7 @@ export default class extends Controller {
 
   #updateSubmitState() {
     if (!this.hasSubmitTarget) return;
-    this.submitTarget.disabled = !this.#hasContent();
+    this.submitTarget.disabled = this.#responding || !this.#hasContent();
   }
 
   #configureAutoScroll() {
