@@ -84,7 +84,7 @@ class Provider::PlaidTest < ActiveSupport::TestCase
   # CreditCard and Loan must include both "liabilities" AND "transactions" so that
   # can_fetch_transactions? returns true and transaction history is synced.
   test "get_initial_products returns transactions for depository accounts" do
-    products = @plaid.send(:get_initial_products, "Account::Depository")
+    products = @plaid.send(:get_initial_products, "Depository")
     assert_equal [ "transactions" ], products
   end
 
