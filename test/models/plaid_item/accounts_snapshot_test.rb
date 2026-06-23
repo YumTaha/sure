@@ -226,6 +226,28 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
     assert_nil @snapshot.send(:liabilities_data)
   end
 
+  test "transactions_data nil is memoized — fetch runs only once on transient error across multiple calls" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    # .once proves the second call hits the memoized nil and does NOT re-call the provider
+    @plaid_provider.expects(:get_transactions).once.raises(plaid_error)
+
+    first_result  = @snapshot.send(:transactions_data)
+    second_result = @snapshot.send(:transactions_data)
+
+    assert_nil first_result,  "expected first call to return nil on transient error"
+    assert_nil second_result, "expected second call to return memoized nil without re-fetching"
+    # mocha verifies :get_transactions was called exactly once (no extra call on second invocation)
+  end
+
   test "non-transient Plaid errors are re-raised, not swallowed" do
     @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
 

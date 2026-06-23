@@ -78,8 +78,9 @@ class PlaidItem::AccountsSnapshot
 
     def transactions_data
       return nil unless can_fetch_transactions?
+      return @transactions_data if defined?(@transactions_data)
 
-      @transactions_data ||= fetch_product_data("transactions") do
+      @transactions_data = fetch_product_data("transactions") do
         plaid_provider.get_transactions(
           plaid_item.access_token,
           next_cursor: plaid_item.next_cursor
@@ -94,7 +95,9 @@ class PlaidItem::AccountsSnapshot
 
     def investments_data
       return nil unless can_fetch_investments?
-      @investments_data ||= fetch_product_data("investments") do
+      return @investments_data if defined?(@investments_data)
+
+      @investments_data = fetch_product_data("investments") do
         plaid_provider.get_item_investments(plaid_item.access_token)
       end
     end
@@ -109,7 +112,9 @@ class PlaidItem::AccountsSnapshot
 
     def liabilities_data
       return nil unless can_fetch_liabilities?
-      @liabilities_data ||= fetch_product_data("liabilities") do
+      return @liabilities_data if defined?(@liabilities_data)
+
+      @liabilities_data = fetch_product_data("liabilities") do
         plaid_provider.get_item_liabilities(plaid_item.access_token)
       end
     end
