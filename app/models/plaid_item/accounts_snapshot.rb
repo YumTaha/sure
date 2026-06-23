@@ -68,30 +68,42 @@ class PlaidItem::AccountsSnapshot
     end
 
     def can_fetch_transactions?
-      plaid_item.supports_product?("transactions") && accounts.any?
+      (plaid_item.supports_product?("transactions") || plaid_item.consents_to_product?("transactions")) && accounts.any?
     end
+
+    # Plaid error codes that mean "this product hasn't finished initializing yet".
+    # The first fetch of a newly-consented product can hit one of these codes;
+    # Plaid initializes the product asynchronously so the next sync will succeed.
+    TRANSIENT_PRODUCT_ERROR_CODES = %w[PRODUCT_NOT_READY PRODUCTS_NOT_SUPPORTED].freeze
 
     def transactions_data
       return nil unless can_fetch_transactions?
+      return @transactions_data if defined?(@transactions_data)
 
-      @transactions_data ||= plaid_provider.get_transactions(
-        plaid_item.access_token,
-        next_cursor: plaid_item.next_cursor
-      )
+      @transactions_data = fetch_product_data("transactions") do
+        plaid_provider.get_transactions(
+          plaid_item.access_token,
+          next_cursor: plaid_item.next_cursor
+        )
+      end
     end
 
     def can_fetch_investments?
-      plaid_item.supports_product?("investments") &&
+      (plaid_item.supports_product?("investments") || plaid_item.consents_to_product?("investments")) &&
       accounts.any? { |a| a.type == "investment" }
     end
 
     def investments_data
       return nil unless can_fetch_investments?
-      @investments_data ||= plaid_provider.get_item_investments(plaid_item.access_token)
+      return @investments_data if defined?(@investments_data)
+
+      @investments_data = fetch_product_data("investments") do
+        plaid_provider.get_item_investments(plaid_item.access_token)
+      end
     end
 
     def can_fetch_liabilities?
-      plaid_item.supports_product?("liabilities") &&
+      (plaid_item.supports_product?("liabilities") || plaid_item.consents_to_product?("liabilities")) &&
       accounts.any? do |a|
         a.type == "credit" && a.subtype == "credit card" ||
         a.type == "loan" && (a.subtype == "mortgage" || a.subtype == "student")
@@ -100,6 +112,45 @@ class PlaidItem::AccountsSnapshot
 
     def liabilities_data
       return nil unless can_fetch_liabilities?
-      @liabilities_data ||= plaid_provider.get_item_liabilities(plaid_item.access_token)
+      return @liabilities_data if defined?(@liabilities_data)
+
+      @liabilities_data = fetch_product_data("liabilities") do
+        plaid_provider.get_item_liabilities(plaid_item.access_token)
+      end
+    end
+
+    # Yields the Plaid API call and rescues transient "product not ready" errors,
+    # logging them and returning nil so the product is skipped for this sync cycle.
+    # Any other error is re-raised so real failures are not silently swallowed.
+    def fetch_product_data(product_name)
+      yield
+    rescue Plaid::ApiError => e
+      error_body = safe_parse_plaid_error(e)
+      error_code = error_body["error_code"].to_s
+
+      raise unless TRANSIENT_PRODUCT_ERROR_CODES.include?(error_code)
+
+      DebugLogEntry.capture(
+        category: "plaid_sync",
+        level: "warn",
+        message: "Plaid product '#{product_name}' not ready (#{error_code}) — skipping this sync, will retry",
+        source: self.class.name,
+        provider_key: "plaid",
+        family: plaid_item.family,
+        metadata: {
+          plaid_item_id: plaid_item.id,
+          product: product_name,
+          error_code: error_code,
+          error_message: error_body["error_message"]
+        }
+      )
+
+      nil
+    end
+
+    def safe_parse_plaid_error(error)
+      JSON.parse(error.response_body.to_s)
+    rescue JSON::ParserError
+      {}
     end
 end

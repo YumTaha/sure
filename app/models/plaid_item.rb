@@ -121,6 +121,24 @@ class PlaidItem < ApplicationRecord
     supported_products.include?(product)
   end
 
+  def consented_products
+    from_snapshot =
+      if raw_payload.is_a?(Hash)
+        raw_payload["consented_products"]
+      elsif raw_payload.respond_to?(:consented_products)
+        raw_payload.consented_products
+      end
+
+    products = Array(from_snapshot)
+    return products if products.present?
+
+    eu? ? [ "transactions" ] : Provider::Plaid::SUPPORTED_PLAID_PRODUCTS
+  end
+
+  def consents_to_product?(product)
+    consented_products.include?(product)
+  end
+
   private
     def remove_plaid_item
       return unless plaid_provider.present?

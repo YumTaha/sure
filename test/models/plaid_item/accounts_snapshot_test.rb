@@ -78,7 +78,9 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
   end
 
   test "fetches investments data if item supports investments and investment accounts present" do
-    @plaid_item.update!(available_products: [ "investments" ], billed_products: [])
+    # Restrict consent to investments only so transactions gate stays closed
+    @plaid_item.update!(available_products: [ "investments" ], billed_products: [],
+                        raw_payload: { "consented_products" => [ "investments" ] })
 
     @snapshot.expects(:accounts).returns([
       OpenStruct.new(
@@ -107,7 +109,9 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
   end
 
   test "fetches liabilities data if item supports liabilities and liabilities accounts present" do
-    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [])
+    # Restrict consent to liabilities only so transactions gate stays closed
+    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [],
+                        raw_payload: { "consented_products" => [ "liabilities" ] })
 
     @snapshot.expects(:accounts).returns([
       OpenStruct.new(
@@ -134,5 +138,129 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
     @plaid_provider.expects(:get_item_liabilities).never
 
     @snapshot.get_account_data("123")
+  end
+
+  # ── consented-but-unbilled product gates ─────────────────────────────────
+
+  test "fetches transactions when product is consented but not billed or available" do
+    # transactions NOT in available_products or billed_products, but IS consented (non-EU item defaults to all)
+    @plaid_item.update!(available_products: [], billed_products: [], plaid_region: "us", raw_payload: {})
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    @plaid_provider.expects(:get_transactions).with(@plaid_item.access_token, next_cursor: nil).returns(
+      OpenStruct.new(added: [], modified: [], removed: [], cursor: nil)
+    ).once
+    @plaid_provider.expects(:get_item_investments).never
+    @plaid_provider.expects(:get_item_liabilities).never
+
+    @snapshot.get_account_data("abc")
+  end
+
+  test "does not fetch transactions when product is neither supported nor consented" do
+    # Snapshot explicitly lists only investments as consented — transactions absent
+    @plaid_item.update!(available_products: [], billed_products: [], plaid_region: "us",
+                        raw_payload: { "consented_products" => [ "investments" ] })
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    @plaid_provider.expects(:get_transactions).never
+    @plaid_provider.expects(:get_item_investments).never
+    @plaid_provider.expects(:get_item_liabilities).never
+
+    @snapshot.get_account_data("abc")
+  end
+
+  # ── transient "product not ready" error handling (E2) ────────────────────
+
+  test "transactions_data returns nil when Plaid raises PRODUCT_NOT_READY" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    @plaid_provider.expects(:get_transactions).raises(plaid_error)
+
+    # Must NOT raise, must return nil so the product is skipped this sync
+    assert_nil @snapshot.send(:transactions_data)
+  end
+
+  test "investments_data returns nil when Plaid raises PRODUCT_NOT_READY" do
+    @plaid_item.update!(available_products: [ "investments" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "investment")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    @plaid_provider.expects(:get_item_investments).raises(plaid_error)
+
+    assert_nil @snapshot.send(:investments_data)
+  end
+
+  test "liabilities_data returns nil when Plaid raises PRODUCTS_NOT_SUPPORTED" do
+    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "credit", subtype: "credit card")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCTS_NOT_SUPPORTED", "error_message" => "Not supported" }.to_json
+    )
+    @plaid_provider.expects(:get_item_liabilities).raises(plaid_error)
+
+    assert_nil @snapshot.send(:liabilities_data)
+  end
+
+  test "transactions_data nil is memoized — fetch runs only once on transient error across multiple calls" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    # .once proves the second call hits the memoized nil and does NOT re-call the provider
+    @plaid_provider.expects(:get_transactions).once.raises(plaid_error)
+
+    first_result  = @snapshot.send(:transactions_data)
+    second_result = @snapshot.send(:transactions_data)
+
+    assert_nil first_result,  "expected first call to return nil on transient error"
+    assert_nil second_result, "expected second call to return memoized nil without re-fetching"
+    # mocha verifies :get_transactions was called exactly once (no extra call on second invocation)
+  end
+
+  test "non-transient Plaid errors are re-raised, not swallowed" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    real_error = Plaid::ApiError.new(
+      code: 500,
+      response_body: { "error_code" => "INTERNAL_SERVER_ERROR", "error_message" => "Something broke" }.to_json
+    )
+    @plaid_provider.expects(:get_transactions).raises(real_error)
+
+    assert_raises(Plaid::ApiError) { @snapshot.send(:transactions_data) }
   end
 end

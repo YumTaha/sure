@@ -56,8 +56,9 @@ class Provider::Plaid
     if access_token.present?
       request_params[:access_token] = access_token
     else
-      request_params[:products] = [ get_primary_product(accountable_type) ]
-      request_params[:additional_consented_products] = get_additional_consented_products(accountable_type)
+      billed = get_initial_products(accountable_type)
+      request_params[:products] = billed
+      request_params[:additional_consented_products] = eu? ? [] : (SUPPORTED_PLAID_PRODUCTS - billed)
     end
 
     request = Plaid::LinkTokenCreateRequest.new(request_params)
@@ -179,23 +180,19 @@ class Provider::Plaid
       [ transactions, securities ]
     end
 
-    def get_primary_product(accountable_type)
-      return "transactions" if eu?
+    def get_initial_products(accountable_type)
+      return [ "transactions" ] if eu?
 
       case accountable_type
       when "Investment"
-        "investments"
+        [ "investments" ]
       when "CreditCard", "Loan"
-        "liabilities"
+        # Bill both liabilities (for APR/balances/due-dates) and transactions so
+        # that can_fetch_transactions? returns true and transaction history syncs.
+        [ "liabilities", "transactions" ]
       else
-        "transactions"
+        [ "transactions" ]
       end
-    end
-
-    def get_additional_consented_products(accountable_type)
-      return [] if eu?
-
-      SUPPORTED_PLAID_PRODUCTS - [ get_primary_product(accountable_type) ]
     end
 
     def eu?

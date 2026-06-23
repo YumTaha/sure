@@ -86,4 +86,40 @@ class PlaidItemTest < ActiveSupport::TestCase
     end
     assert_predicate @plaid_item.reload, :good?
   end
+
+  # ── consented_products / consents_to_product? ────────────────────────────
+
+  test "consented_products returns SUPPORTED_PLAID_PRODUCTS for a non-EU item with no snapshot entry" do
+    @plaid_item.update!(plaid_region: "us", raw_payload: {})
+
+    assert_equal Provider::Plaid::SUPPORTED_PLAID_PRODUCTS, @plaid_item.consented_products
+  end
+
+  test "consented_products returns the value stored in raw_payload when present" do
+    @plaid_item.update!(raw_payload: { "consented_products" => [ "transactions" ] })
+
+    assert_equal [ "transactions" ], @plaid_item.consented_products
+  end
+
+  test "consented_products returns transactions-only for an EU item with no snapshot entry" do
+    @plaid_item.update!(plaid_region: "eu", raw_payload: {})
+
+    assert_equal [ "transactions" ], @plaid_item.consented_products
+  end
+
+  test "consents_to_product? returns true when product is in consented_products" do
+    @plaid_item.update!(plaid_region: "us", raw_payload: {})
+
+    assert @plaid_item.consents_to_product?("transactions")
+    assert @plaid_item.consents_to_product?("investments")
+    assert @plaid_item.consents_to_product?("liabilities")
+  end
+
+  test "consents_to_product? returns false when product is not consented" do
+    @plaid_item.update!(plaid_region: "eu", raw_payload: {})
+
+    assert @plaid_item.consents_to_product?("transactions")
+    assert_not @plaid_item.consents_to_product?("investments")
+    assert_not @plaid_item.consents_to_product?("liabilities")
+  end
 end

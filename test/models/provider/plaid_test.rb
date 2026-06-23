@@ -80,6 +80,45 @@ class Provider::PlaidTest < ActiveSupport::TestCase
     end
   end
 
+  # get_initial_products determines which Plaid products are billed at link time.
+  # CreditCard and Loan must include both "liabilities" AND "transactions" so that
+  # can_fetch_transactions? returns true and transaction history is synced.
+  test "get_initial_products returns transactions for depository accounts" do
+    products = @plaid.send(:get_initial_products, "Depository")
+    assert_equal [ "transactions" ], products
+  end
+
+  test "get_initial_products returns transactions for nil accountable_type" do
+    products = @plaid.send(:get_initial_products, nil)
+    assert_equal [ "transactions" ], products
+  end
+
+  test "get_initial_products returns investments for Investment accounts" do
+    products = @plaid.send(:get_initial_products, "Investment")
+    assert_equal [ "investments" ], products
+  end
+
+  test "get_initial_products returns liabilities and transactions for CreditCard accounts" do
+    products = @plaid.send(:get_initial_products, "CreditCard")
+    assert_includes products, "liabilities"
+    assert_includes products, "transactions"
+  end
+
+  test "get_initial_products returns liabilities and transactions for Loan accounts" do
+    products = @plaid.send(:get_initial_products, "Loan")
+    assert_includes products, "liabilities"
+    assert_includes products, "transactions"
+  end
+
+  test "get_initial_products returns only transactions for EU region regardless of account type" do
+    # Stub eu? on the sandbox instance to simulate EU region behaviour without
+    # a real Plaid EU configuration or a separate constructor argument.
+    @plaid.stubs(:eu?).returns(true)
+    assert_equal [ "transactions" ], @plaid.send(:get_initial_products, "CreditCard")
+    assert_equal [ "transactions" ], @plaid.send(:get_initial_products, "Loan")
+    assert_equal [ "transactions" ], @plaid.send(:get_initial_products, "Investment")
+  end
+
   private
     def get_access_token
       VCR.use_cassette("plaid/access_token") do
