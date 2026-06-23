@@ -33,6 +33,14 @@ class ChatsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to chats_url
   end
 
+  test "does not create chat when content is blank" do
+    assert_no_difference "Chat.count" do
+      post chats_url, params: { chat: { content: "", ai_model: "gpt-4.1" } }
+    end
+
+    assert_redirected_to new_chat_path
+  end
+
   test "should not allow access to other user's chats" do
     other_user = users(:family_member)
     other_chat = Chat.create!(user: other_user, title: "Other User's Chat")

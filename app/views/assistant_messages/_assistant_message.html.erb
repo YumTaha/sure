@@ -1,6 +1,6 @@
 <%# locals: (assistant_message:) %>
 
-<div id="<%= dom_id(assistant_message) %>">
+<div id="<%= dom_id(assistant_message) %>" <%= "data-chat-target=pendingResponse" if assistant_message.pending? || assistant_message.generating? %>>
   <% if assistant_message.pending? %>
     <div class="flex items-start gap-3 mb-6">
       <%= render "chats/ai_avatar" %>
@@ -15,7 +15,7 @@
 
       <div class="prose prose--ai-chat"><%= markdown(assistant_message.content) %></div>
     </details>
-  <% else %>
+  <% elsif assistant_message.generating? || assistant_message.complete? || assistant_message.failed? %>
     <% if assistant_message.chat.debug_mode? && assistant_message.tool_calls.any? %>
       <%= render "assistant_messages/tool_calls", message: assistant_message %>
     <% end %>

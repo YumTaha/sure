@@ -55,13 +55,25 @@ class Assistant::Builtin < Assistant::Base
     end
 
     responder.respond(previous_response_id: latest_response_id)
+    if assistant_message.pending? || assistant_message.generating?
+      if assistant_message.content.present?
+        assistant_message.update!(status: :complete)
+      else
+        # No text was produced (e.g. empty model response) — clear the "Thinking…" bubble
+        # rather than forcing `complete` (which would fail the content-presence validation).
+        assistant_message.destroy
+      end
+    end
   rescue => e
     if assistant_message&.persisted?
       if assistant_message.content.blank?
         assistant_message.destroy
       else
-        # Demote partially-streamed turns to `failed` so the responder's history builders (`#openai_messages_payload`, `#chat_message_records`) exclude them.
-        assistant_message.update_columns(status: "failed")
+        # Demote partially-streamed turns (pending or generating) to `failed` so the responder's
+        # history builders (`#openai_messages_payload`, `#chat_message_records`) exclude them.
+        # Use update! (not update_columns) so after_update_commit broadcasts the re-render,
+        # dropping the pendingResponse marker and releasing the send-lock on error.
+        assistant_message.update!(status: :failed)
       end
     end
     chat.add_error(e)

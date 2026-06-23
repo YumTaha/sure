@@ -4,6 +4,7 @@ class Message < ApplicationRecord
 
   enum :status, {
     pending: "pending",
+    generating: "generating",
     complete: "complete",
     failed: "failed"
   }

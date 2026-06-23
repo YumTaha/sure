@@ -76,6 +76,10 @@ class Chat < ApplicationRecord
     conversation_messages.ordered.last.role != "assistant"
   end
 
+  def assistant_responding?
+    messages.where(type: "AssistantMessage").where(status: [ :pending, :generating ]).exists?
+  end
+
   def retry_last_message!
     update!(error: nil)
 

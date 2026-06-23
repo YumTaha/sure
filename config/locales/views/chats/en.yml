@@ -22,6 +22,8 @@ en:
       delete_chat: "Delete chat"
     error:
       retry: "Retry"
+    create:
+      blank_content: "Please enter a message."
     destroy:
       notice: "Chat was successfully deleted"
     index:
