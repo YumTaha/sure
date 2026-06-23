@@ -68,7 +68,7 @@ class PlaidItem::AccountsSnapshot
     end
 
     def can_fetch_transactions?
-      plaid_item.supports_product?("transactions") && accounts.any?
+      (plaid_item.supports_product?("transactions") || plaid_item.consents_to_product?("transactions")) && accounts.any?
     end
 
     def transactions_data
@@ -81,7 +81,7 @@ class PlaidItem::AccountsSnapshot
     end
 
     def can_fetch_investments?
-      plaid_item.supports_product?("investments") &&
+      (plaid_item.supports_product?("investments") || plaid_item.consents_to_product?("investments")) &&
       accounts.any? { |a| a.type == "investment" }
     end
 
@@ -91,7 +91,7 @@ class PlaidItem::AccountsSnapshot
     end
 
     def can_fetch_liabilities?
-      plaid_item.supports_product?("liabilities") &&
+      (plaid_item.supports_product?("liabilities") || plaid_item.consents_to_product?("liabilities")) &&
       accounts.any? do |a|
         a.type == "credit" && a.subtype == "credit card" ||
         a.type == "loan" && (a.subtype == "mortgage" || a.subtype == "student")

@@ -78,7 +78,9 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
   end
 
   test "fetches investments data if item supports investments and investment accounts present" do
-    @plaid_item.update!(available_products: [ "investments" ], billed_products: [])
+    # Restrict consent to investments only so transactions gate stays closed
+    @plaid_item.update!(available_products: [ "investments" ], billed_products: [],
+                        raw_payload: { "consented_products" => [ "investments" ] })
 
     @snapshot.expects(:accounts).returns([
       OpenStruct.new(
@@ -107,7 +109,9 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
   end
 
   test "fetches liabilities data if item supports liabilities and liabilities accounts present" do
-    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [])
+    # Restrict consent to liabilities only so transactions gate stays closed
+    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [],
+                        raw_payload: { "consented_products" => [ "liabilities" ] })
 
     @snapshot.expects(:accounts).returns([
       OpenStruct.new(
@@ -134,5 +138,40 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
     @plaid_provider.expects(:get_item_liabilities).never
 
     @snapshot.get_account_data("123")
+  end
+
+  # ── consented-but-unbilled product gates ─────────────────────────────────
+
+  test "fetches transactions when product is consented but not billed or available" do
+    # transactions NOT in available_products or billed_products, but IS consented (non-EU item defaults to all)
+    @plaid_item.update!(available_products: [], billed_products: [], plaid_region: "us", raw_payload: {})
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    @plaid_provider.expects(:get_transactions).with(@plaid_item.access_token, next_cursor: nil).returns(
+      OpenStruct.new(added: [], modified: [], removed: [], cursor: nil)
+    ).once
+    @plaid_provider.expects(:get_item_investments).never
+    @plaid_provider.expects(:get_item_liabilities).never
+
+    @snapshot.get_account_data("abc")
+  end
+
+  test "does not fetch transactions when product is neither supported nor consented" do
+    # Snapshot explicitly lists only investments as consented — transactions absent
+    @plaid_item.update!(available_products: [], billed_products: [], plaid_region: "us",
+                        raw_payload: { "consented_products" => [ "investments" ] })
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    @plaid_provider.expects(:get_transactions).never
+    @plaid_provider.expects(:get_item_investments).never
+    @plaid_provider.expects(:get_item_liabilities).never
+
+    @snapshot.get_account_data("abc")
   end
 end
