@@ -58,7 +58,7 @@ class Provider::Plaid
     else
       billed = get_initial_products(accountable_type)
       request_params[:products] = billed
-      request_params[:additional_consented_products] = SUPPORTED_PLAID_PRODUCTS - billed
+      request_params[:additional_consented_products] = eu? ? [] : (SUPPORTED_PLAID_PRODUCTS - billed)
     end
 
     request = Plaid::LinkTokenCreateRequest.new(request_params)
