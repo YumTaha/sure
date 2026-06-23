@@ -77,7 +77,7 @@ class Chat < ApplicationRecord
   end
 
   def assistant_responding?
-    messages.where(type: "AssistantMessage").pending.exists?
+    messages.where(type: "AssistantMessage").where(status: [ :pending, :generating ]).exists?
   end
 
   def retry_last_message!
