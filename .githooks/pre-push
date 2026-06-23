@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo "❌ gitleaks not installed — refusing to push unscanned. Install per GITHUB.md, then retry." >&2
+  echo "❌ gitleaks not installed — refusing to push unscanned. Install: https://github.com/gitleaks/gitleaks#installing (or your package manager), then retry." >&2
   exit 1
 fi
 zero="0000000000000000000000000000000000000000"
