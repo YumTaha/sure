@@ -174,4 +174,71 @@ class PlaidItem::AccountsSnapshotTest < ActiveSupport::TestCase
 
     @snapshot.get_account_data("abc")
   end
+
+  # ── transient "product not ready" error handling (E2) ────────────────────
+
+  test "transactions_data returns nil when Plaid raises PRODUCT_NOT_READY" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    @plaid_provider.expects(:get_transactions).raises(plaid_error)
+
+    # Must NOT raise, must return nil so the product is skipped this sync
+    assert_nil @snapshot.send(:transactions_data)
+  end
+
+  test "investments_data returns nil when Plaid raises PRODUCT_NOT_READY" do
+    @plaid_item.update!(available_products: [ "investments" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "investment")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCT_NOT_READY", "error_message" => "Product not initialized yet" }.to_json
+    )
+    @plaid_provider.expects(:get_item_investments).raises(plaid_error)
+
+    assert_nil @snapshot.send(:investments_data)
+  end
+
+  test "liabilities_data returns nil when Plaid raises PRODUCTS_NOT_SUPPORTED" do
+    @plaid_item.update!(available_products: [ "liabilities" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "credit", subtype: "credit card")
+    ]).at_least_once
+
+    plaid_error = Plaid::ApiError.new(
+      code: 400,
+      response_body: { "error_code" => "PRODUCTS_NOT_SUPPORTED", "error_message" => "Not supported" }.to_json
+    )
+    @plaid_provider.expects(:get_item_liabilities).raises(plaid_error)
+
+    assert_nil @snapshot.send(:liabilities_data)
+  end
+
+  test "non-transient Plaid errors are re-raised, not swallowed" do
+    @plaid_item.update!(available_products: [ "transactions" ], billed_products: [])
+
+    @snapshot.expects(:accounts).returns([
+      OpenStruct.new(account_id: "abc", type: "depository")
+    ]).at_least_once
+
+    real_error = Plaid::ApiError.new(
+      code: 500,
+      response_body: { "error_code" => "INTERNAL_SERVER_ERROR", "error_message" => "Something broke" }.to_json
+    )
+    @plaid_provider.expects(:get_transactions).raises(real_error)
+
+    assert_raises(Plaid::ApiError) { @snapshot.send(:transactions_data) }
+  end
 end
