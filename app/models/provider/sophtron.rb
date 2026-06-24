@@ -280,6 +280,52 @@ class Provider::Sophtron < Provider
     end
   end
 
+  # POST /api/UserInstitution/DeleteUserInstitution
+  def delete_user_institution(user_institution_id)
+    with_provider_response do
+      request(
+        :post,
+        "/UserInstitution/DeleteUserInstitution",
+        body: { UserInstitutionID: user_institution_id }
+      )
+    end
+  end
+
+  # POST /api/userinstitution/UpdateUserInstitution
+  def update_user_institution(user_institution_id, username:, password:, pin: "")
+    with_provider_response do
+      request(
+        :post,
+        "/userinstitution/UpdateUserInstitution",
+        body: {
+          UserInstitutionID: user_institution_id,
+          UserName: username,
+          Password: password,
+          PIN: pin.to_s
+        }
+      )
+    end
+  end
+
+  # POST /api/UserInstitution/RefreshUserInstitution
+  def refresh_user_institution(user_institution_id)
+    with_provider_response do
+      request(
+        :post,
+        "/UserInstitution/RefreshUserInstitution",
+        body: {
+          UserInstitutionID: user_institution_id,
+          aggregate: true,
+          balance: true,
+          identity: false,
+          verification: false,
+          rewards: false,
+          history: false
+        }
+      )
+    end
+  end
+
   def poll_job(job_id, **)
     get_job_information(job_id)
   end

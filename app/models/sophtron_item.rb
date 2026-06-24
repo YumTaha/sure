@@ -59,6 +59,38 @@ class SophtronItem < ApplicationRecord
     DestroyJob.perform_later(self)
   end
 
+  # Deletes the remote Sophtron UserInstitution for this item.
+  #
+  # Best-effort: if the remote call fails for any reason the error is recorded
+  # as a DebugLogEntry and this method returns without raising so the caller
+  # (destroy path) can still proceed with local cleanup.
+  #
+  # Skipped entirely when +user_institution_id+ is blank (item was never fully
+  # connected to Sophtron).
+def delete_remote!
+    return if user_institution_id.blank?
+
+    provider = sophtron_provider
+    raise Provider::Sophtron::Error.new("Sophtron provider is not configured", :configuration_error) unless provider
+
+    Provider::Sophtron.response_data!(provider.delete_user_institution(user_institution_id))
+  rescue => e
+    DebugLogEntry.capture(
+      category: "provider_disconnect",
+      level: "warn",
+      message: "Failed to delete remote Sophtron UserInstitution: #{e.message}",
+      source: self.class.name,
+      provider_key: "sophtron",
+      family: family,
+      metadata: {
+        sophtron_item_id: id,
+        user_institution_id: user_institution_id,
+        error_class: e.class.name,
+        error_message: e.message
+      }
+    )
+  end
+
   # Imports the latest account and transaction data from Sophtron.
   #
   # This method fetches all accounts and transactions from the Sophtron API

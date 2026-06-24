@@ -215,4 +215,40 @@ class SophtronItemTest < ActiveSupport::TestCase
     assert_empty manual_item.automatic_sync_sophtron_accounts
     assert_equal [ first_account, second_account ], manual_item.manual_sync_sophtron_accounts.to_a
   end
+
+  test "delete_remote! calls delete_user_institution with item's user_institution_id" do
+    @item.update!(user_institution_id: "ui-to-delete")
+    provider = mock
+    provider.expects(:delete_user_institution).with("ui-to-delete").returns({})
+    @item.stubs(:sophtron_provider).returns(provider)
+
+    assert_nothing_raised { @item.delete_remote! }
+  end
+
+  test "delete_remote! is a no-op when user_institution_id is blank" do
+    @item.update!(user_institution_id: nil)
+    provider = mock
+    provider.expects(:delete_user_institution).never
+    @item.stubs(:sophtron_provider).returns(provider)
+
+    assert_nothing_raised { @item.delete_remote! }
+  end
+
+  test "delete_remote! records a DebugLogEntry and does not raise when provider call fails" do
+    @item.update!(user_institution_id: "ui-bad")
+    provider = mock
+    provider.expects(:delete_user_institution).with("ui-bad").raises(Provider::Sophtron::Error.new("timeout", :request_failed))
+    @item.stubs(:sophtron_provider).returns(provider)
+
+    assert_difference "DebugLogEntry.count", 1 do
+      assert_nothing_raised { @item.delete_remote! }
+    end
+
+    entry = DebugLogEntry.order(:created_at).last
+    assert_equal "provider_disconnect", entry.category
+    assert_equal "warn", entry.level
+    assert_equal "sophtron", entry.provider_key
+    assert_equal @item.family, entry.family
+    assert_equal "ui-bad", entry.metadata["user_institution_id"]
+  end
 end

@@ -216,6 +216,42 @@ class Provider::SophtronTest < ActiveSupport::TestCase
     assert_equal :unauthorized, response.error.error_type
   end
 
+  test "deletes user institution with documented V1 body" do
+    stub_request(:post, "https://api.sophtron.com/api/UserInstitution/DeleteUserInstitution")
+      .with(body: { UserInstitutionID: "ui-to-delete" }.to_json)
+      .to_return(status: 200, body: "\"Success\"")
+
+    response = @provider.delete_user_institution("ui-to-delete")
+
+    assert response.success?
+  end
+
+  test "updates user institution with documented V1 body" do
+    stub_request(:post, "https://api.sophtron.com/api/userinstitution/UpdateUserInstitution")
+      .with(body: {
+        UserInstitutionID: "ui-1",
+        UserName: "new-user",
+        Password: "new-pass",
+        PIN: ""
+      }.to_json)
+      .to_return(status: 200, body: "\"Succeeded\"")
+
+    response = @provider.update_user_institution("ui-1", username: "new-user", password: "new-pass")
+
+    assert response.success?
+  end
+
+  test "refreshes user institution with documented V1 body" do
+    stub_request(:post, "https://api.sophtron.com/api/UserInstitution/RefreshUserInstitution")
+      .with(body: { UserInstitutionID: "ui-1", aggregate: true, balance: true, identity: false, verification: false, rewards: false, history: false }.to_json)
+      .to_return(status: 200, body: { JobID: "job-refresh", UserInstitutionID: "ui-1", MemberID: "mem-1" }.to_json)
+
+    result = provider_data(@provider.refresh_user_institution("ui-1"))
+
+    assert_equal "job-refresh", result[:JobID]
+    assert_equal "ui-1", result[:UserInstitutionID]
+  end
+
   private
 
     def provider_data(response)
