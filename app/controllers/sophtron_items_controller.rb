@@ -1015,7 +1015,8 @@ class SophtronItemsController < ApplicationController
       # has a SophtronItem for the requested institution — if so, reuse it
       # instead of creating a duplicate.
       if connect_new_institution_flow? && params[:institution_id].present?
-        existing = Current.family.sophtron_items.find_by(institution_id: params[:institution_id])
+        scope = Current.family.sophtron_items.active.where(institution_id: params[:institution_id])
+        existing = scope.where.not(user_institution_id: [ nil, "" ]).order(updated_at: :desc).first || scope.order(updated_at: :desc).first
         return existing if existing.present?
       end
 
