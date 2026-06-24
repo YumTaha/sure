@@ -574,6 +574,10 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Verification code"
     assert_includes response.body, "Try connecting again"
     assert_not_includes response.body, "Check Provider Settings"
+    # Retry must re-enter the connect flow inside the modal frame, not full-navigate to a
+    # layout-less fragment (the bad-credentials white-screen bug).
+    assert_includes response.body, 'data-turbo-frame="modal"'
+    assert_not_includes response.body, 'data-turbo="false"'
     @item.reload
     assert_equal "requires_update", @item.status
     assert_nil @item.current_job_id
