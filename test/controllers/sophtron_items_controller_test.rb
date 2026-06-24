@@ -303,8 +303,10 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "poll_attempt=3"
     assert_includes response.body, 'data-controller="polling"'
     assert_includes response.body, 'data-polling-frame-id-value="modal"'
-    assert_includes response.body, 'data-turbo-prefetch="false"'
-    assert_select "a[href*='poll_attempt=3']"
+    # While auto-polling is live, the manual "Check again" button must NOT be shown — only
+    # the timed-out recovery state offers it (clicking mid-poll would race the auto-poll).
+    assert_not_includes response.body, 'data-turbo-prefetch="false"'
+    assert_select "a[href*='poll_attempt=3']", count: 0
   end
 
   test "connection_status keeps polling through the third initial attempt for delayed otp" do
