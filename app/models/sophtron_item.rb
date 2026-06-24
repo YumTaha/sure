@@ -127,7 +127,7 @@ class SophtronItem < ApplicationRecord
   end
 
   def manual_sync_required?
-    manual_sync? || sophtron_accounts.requires_manual_sync.exists?
+    manual_sync? || requires_update? || sophtron_accounts.requires_manual_sync.exists?
   end
 
   def manual_sync_sophtron_accounts
@@ -136,7 +136,7 @@ class SophtronItem < ApplicationRecord
 
     return manual_accounts if manual_accounts.exists?
 
-    manual_sync? ? linked_accounts : linked_accounts.none
+    (manual_sync? || requires_update?) ? linked_accounts : linked_accounts.none
   end
 
   def connected_institution_options

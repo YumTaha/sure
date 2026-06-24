@@ -113,6 +113,8 @@ en:
       status: "Synced %{timestamp} ago"
       status_never: Never synced
       status_with_summary: "Last synced %{timestamp} ago • %{summary}"
+      reconnect: Reconnect
+      requires_update: "Reconnect required"
       sync_now: Sync now
       syncing: Syncing...
       total: Total
