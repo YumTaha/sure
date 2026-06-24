@@ -76,6 +76,23 @@ class SophtronRefreshPollJobTest < ActiveJob::TestCase
     end
   end
 
+  test "successful import clears last_connection_error and restores good status" do
+    @item.update!(status: :requires_update, last_connection_error: "Sophtron refresh requires MFA")
+    provider = mock
+    provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "Completed" })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+    SophtronItem::Importer.any_instance.expects(:import_transactions_after_refresh)
+                           .with(@sophtron_account)
+                           .returns({ success: true, transactions_count: 2 })
+    SophtronAccount::Processor.any_instance.expects(:process).returns({ transactions_imported: 2 })
+
+    SophtronRefreshPollJob.perform_now(@sophtron_account, job_id: "refresh-job")
+
+    @item.reload
+    assert_nil @item.last_connection_error
+    assert_equal "good", @item.status
+  end
+
   test "does not re-enqueue when fetch returns 0 transactions and last attempt is exhausted" do
     provider = mock
     provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "AccountsReady" })
