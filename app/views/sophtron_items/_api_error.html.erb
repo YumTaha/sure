@@ -1,8 +1,12 @@
-<%# locals: (error_message:, return_path: nil, heading: nil, issue_keys: nil, action_label: nil) %>
+<%# locals: (error_message:, return_path: nil, heading: nil, issue_keys: nil, action_label: nil, action_data: nil) %>
 <% heading ||= t("sophtron_items.api_error.unable_to_connect") %>
 <% issue_keys ||= %w[incorrect_user_id invalid_access_key expired_credentials network_issue service_down] %>
 <% action_path = return_path.presence || settings_providers_path %>
 <% action_label ||= t("sophtron_items.api_error.check_provider_settings") %>
+<%# Default: full navigation (action_path is a real page). In-modal callers (e.g. retry back
+    into the connect flow, which renders layout: false) pass { turbo_frame: "modal" } so the
+    fragment swaps into this frame instead of a full nav landing on a layout-less blank page. %>
+<% action_data ||= { turbo: false } %>
 
 <%= turbo_frame_tag "modal" do %>
   <%= render DS::Dialog.new do |dialog| %>
@@ -33,7 +37,7 @@
                 text: action_label,
                 href: action_path,
                 variant: :primary,
-                data: { turbo: false }
+                data: action_data
               ) %>
         </div>
       </div>

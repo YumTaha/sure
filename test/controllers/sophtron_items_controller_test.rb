@@ -303,8 +303,10 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "poll_attempt=3"
     assert_includes response.body, 'data-controller="polling"'
     assert_includes response.body, 'data-polling-frame-id-value="modal"'
-    assert_includes response.body, 'data-turbo-prefetch="false"'
-    assert_select "a[href*='poll_attempt=3']"
+    # While auto-polling is live, the manual "Check again" button must NOT be shown — only
+    # the timed-out recovery state offers it (clicking mid-poll would race the auto-poll).
+    assert_not_includes response.body, 'data-turbo-prefetch="false"'
+    assert_select "a[href*='poll_attempt=3']", count: 0
   end
 
   test "connection_status keeps polling through the third initial attempt for delayed otp" do
@@ -398,7 +400,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     get connection_status_sophtron_item_url(@item, poll_attempt: SophtronItemsController::CONNECTION_STATUS_MAX_POLLS, post_mfa: true)
 
     assert_response :success
-    assert_includes response.body, "Attempt #{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS} of 15"
+    assert_includes response.body, "Attempt #{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS} of #{SophtronItemsController::POST_MFA_CONNECTION_STATUS_MAX_POLLS}"
     assert_includes response.body, "poll_attempt=#{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS + 1}"
     assert_not_includes response.body, "Sophtron did not finish connecting"
   end
@@ -442,6 +444,77 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_nil @item.current_job_id
     assert_equal "good", @item.status
     assert @item.pending_account_setup?
+  end
+
+  test "connection_status renders accounts on a completed push-approval connect without MFA" do
+    # Apple Card push-approval: no code is entered (post_mfa absent), but the job still
+    # reaches Completed on LogInPanel with accounts ready. Must advance to selection, not
+    # poll until the cap and time out.
+    @item.update!(user_institution_id: "ui-1", current_job_id: "job-1")
+    provider = mock
+    provider.expects(:get_job_information).with("job-1").returns({
+      AccountID: "00000000-0000-0000-0000-000000000000",
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      LastStep: "LogInPanel",
+      LastStatus: "Completed"
+    })
+    provider.expects(:get_accounts).with("ui-1").returns({
+      accounts: [
+        {
+          id: "acct-1",
+          account_id: "acct-1",
+          account_name: "Apple Card",
+          institution_name: "Apple Card",
+          balance: "50.00",
+          balance_currency: "USD",
+          currency: "USD",
+          status: "active"
+        }.with_indifferent_access
+      ],
+      total: 1
+    })
+
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    get connection_status_sophtron_item_url(@item, poll_attempt: 3)
+
+    assert_response :success
+    assert_includes response.body, "Apple Card"
+    assert_not_includes response.body, "Sophtron did not finish connecting"
+    @item.reload
+    assert_nil @item.current_job_id
+    assert_equal "good", @item.status
+  end
+
+  test "connection_status keeps the long polling window while a completed job awaits accounts" do
+    # Completed (SuccessFlag null) means login is done but accounts are still materializing.
+    # The window must stay long (not drop to the short default) so it doesn't time out early.
+    # Seed raw_job_payload to mimic the prior poll's snapshot (the cap is read from it before
+    # this request fetches the job).
+    @item.update!(
+      user_institution_id: "ui-1",
+      current_job_id: "job-1",
+      job_status: "Completed",
+      raw_job_payload: { JobID: "job-1", LastStep: "LogInPanel", LastStatus: "Completed" }
+    )
+    provider = mock
+    provider.expects(:get_job_information).with("job-1").returns({
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      LastStep: "LogInPanel",
+      LastStatus: "Completed"
+    })
+    provider.expects(:get_accounts).with("ui-1").returns({ accounts: [], total: 0 })
+
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    get connection_status_sophtron_item_url(@item, poll_attempt: 7)
+
+    assert_response :success
+    assert_includes response.body, "of #{SophtronItemsController::LOGIN_PROGRESS_CONNECTION_STATUS_MAX_POLLS}"
+    assert_not_includes response.body, "Sophtron did not finish connecting"
+    assert_equal "job-1", @item.reload.current_job_id
   end
 
   test "connection_status keeps polling when post mfa completed job has no accounts yet" do
@@ -501,6 +574,10 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "Verification code"
     assert_includes response.body, "Try connecting again"
     assert_not_includes response.body, "Check Provider Settings"
+    # Retry must re-enter the connect flow inside the modal frame, not full-navigate to a
+    # layout-less fragment (the bad-credentials white-screen bug).
+    assert_includes response.body, 'data-turbo-frame="modal"'
+    assert_not_includes response.body, 'data-turbo="false"'
     @item.reload
     assert_equal "requires_update", @item.status
     assert_nil @item.current_job_id
@@ -592,6 +669,32 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     }
 
     assert_redirected_to connection_status_sophtron_item_path(@item, post_mfa: true)
+  end
+
+  test "connection_status keeps polling silently instead of re-prompting the same MFA within the grace window" do
+    @item.update!(user_institution_id: "ui-1", current_job_id: "job-1")
+    provider = mock
+    provider.stubs(:update_job_token_input).returns({})
+    # Sophtron lags after the submit: still reports the TokenInput step with the value not yet registered.
+    provider.stubs(:get_job_information).with("job-1").returns({
+      AccountID: "00000000-0000-0000-0000-000000000000",
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      TokenInput: "",
+      TokenSentFlag: true,
+      LastStep: "TokenInput",
+      LastStatus: "Started"
+    })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    # Answer the code, then poll again while Sophtron still reports the same challenge.
+    post submit_mfa_sophtron_item_url(@item), params: { mfa_type: "token_input", token_input: "123456" }
+    get connection_status_sophtron_item_url(@item, post_mfa: true, poll_attempt: 2)
+
+    assert_response :success
+    # Should show the "still connecting" pending view, NOT re-render the MFA code form.
+    assert_includes response.body, "Sophtron is still connecting"
+    assert_not_includes response.body, "submit_mfa"
   end
 
   test "toggle_manual_sync marks linked Sophtron institution accounts manual" do

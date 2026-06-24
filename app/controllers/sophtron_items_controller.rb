@@ -2,9 +2,17 @@ class SophtronItemsController < ApplicationController
   include SyncStats::Collector
 
   CONNECTION_STATUS_MAX_POLLS = 6
-  LOGIN_PROGRESS_CONNECTION_STATUS_MAX_POLLS = 15
-  POST_MFA_CONNECTION_STATUS_MAX_POLLS = 15
+  # Sophtron's login/approval and post-MFA finalize are slow: after the MFA code clears,
+  # the job sits at AccountsReady with SuccessFlag=null for ~60-80s before it flips to
+  # SuccessFlag=true, and a push-approval ("Allow on phone") login can take a while too.
+  # 38 polls x 4s ≈ 152s gives both phases headroom (was 15 = 60s, which timed out mid-finalize).
+  LOGIN_PROGRESS_CONNECTION_STATUS_MAX_POLLS = 38
+  POST_MFA_CONNECTION_STATUS_MAX_POLLS = 38
   CONNECTION_STATUS_POLL_INTERVAL_MS = 4_000
+  # After the user submits an MFA answer, Sophtron lags a few seconds still reporting the
+  # same challenge step (with the submitted value not yet registered). Within this grace
+  # window we keep polling silently instead of re-prompting for the same code.
+  MFA_ANSWER_GRACE_SECONDS = 45
   MAX_SECURITY_ANSWERS = 10
   MAX_SECURITY_ANSWER_LENGTH = 256
   MANUAL_SYNC_PROCESSED_ACCOUNT_IDS_KEY = "manual_sync_processed_sophtron_account_ids"
@@ -173,6 +181,7 @@ class SophtronItemsController < ApplicationController
     @sophtron_item.upsert_job_snapshot!(job)
 
     if Provider::Sophtron.job_success?(job)
+      clear_mfa_answer_grace!
       if manual_sync_flow?
         complete_manual_sync_from_job(job)
         return
@@ -186,21 +195,36 @@ class SophtronItemsController < ApplicationController
       )
       render_account_selection(@sophtron_item, force_refresh: true)
     elsif Provider::Sophtron.job_requires_input?(job)
-      @challenge = @sophtron_item.build_mfa_challenge(job)
-      prepare_connection_status_context
-      render :mfa, layout: false
+      # Sophtron lags after an MFA submit: it keeps reporting the same challenge step for a
+      # few seconds before the answer registers. Don't re-prompt for the same code during the
+      # grace window — keep polling silently. Only re-prompt for a genuinely different
+      # challenge type or once the grace has expired (likely a wrong/expired code).
+      if within_mfa_answer_grace?(job)
+        render_pending_connection_status
+      else
+        @challenge = @sophtron_item.build_mfa_challenge(job)
+        prepare_connection_status_context
+        render :mfa, layout: false
+      end
     elsif Provider::Sophtron.job_completed?(job)
       if manual_sync_flow?
         complete_manual_sync_from_job(job)
         return
       end
 
-      if post_mfa_polling?
-        return if render_account_selection_if_accounts_available(@sophtron_item)
+      # Sophtron reports LastStatus=Completed on LogInPanel ~60-80s before AccountsReady,
+      # so job_success? hasn't fired yet. Whenever the accounts are actually fetchable we
+      # advance to selection — not only after MFA. A push-approval connect (no code, so
+      # post_mfa=false) reaches Completed too; gating this on post_mfa_polling? left it
+      # polling until the cap and timing out, even though the accounts were ready.
+      if render_account_selection_if_accounts_available(@sophtron_item)
+        clear_mfa_answer_grace!
+        return
       end
 
       render_pending_connection_status
     elsif Provider::Sophtron.job_failed?(job)
+      clear_mfa_answer_grace!
       failure_message = sophtron_connection_failure_message(job)
       # Always preserve the existing user_institution_id on failure so that a subsequent
       # reconnect attempt goes through the reuse path (refresh_user_institution) rather
@@ -248,6 +272,7 @@ class SophtronItemsController < ApplicationController
       return
     end
 
+    record_mfa_answer_grace!(params[:mfa_type])
     redirect_to connection_status_sophtron_item_path(@sophtron_item, connection_context_params.merge(post_mfa: true))
   rescue Provider::Sophtron::Error => e
     Rails.logger.error("Sophtron MFA submission error: #{e.message}")
@@ -1125,6 +1150,49 @@ class SophtronItemsController < ApplicationController
       poll_attempt.positive? ? poll_attempt : 1
     end
 
+    def mfa_answer_grace_key
+      "sophtron_mfa_answered_#{@sophtron_item.id}"
+    end
+
+    def record_mfa_answer_grace!(mfa_type)
+      return if mfa_type.blank?
+
+      session[mfa_answer_grace_key] = { "type" => mfa_type.to_s, "at" => Time.current.to_i }
+    end
+
+    def clear_mfa_answer_grace!
+      session.delete(mfa_answer_grace_key)
+    end
+
+    # True while the challenge the job is still reporting matches the one the user just
+    # answered, within the grace window — Sophtron hasn't registered the answer yet.
+    def within_mfa_answer_grace?(job)
+      answered = session[mfa_answer_grace_key]
+      return false if answered.blank?
+
+      current_type = mfa_type_for_job(job)
+      return false if current_type.blank?
+
+      answered["type"] == current_type &&
+        (Time.current.to_i - answered["at"].to_i) < MFA_ANSWER_GRACE_SECONDS
+    end
+
+    # Maps a job's challenge fields to the same vocabulary submit_mfa records (params[:mfa_type]).
+    # Coarse by design (keyed on type, not payload); fine for single-challenge banks like
+    # Discover/Apple Card. Multi-question banks would need keying on the question text.
+    def mfa_type_for_job(job)
+      job = job.with_indifferent_access
+      if (job[:CaptchaImage] || job[:captcha_image]).present?
+        "captcha"
+      elsif (job[:SecurityQuestion] || job[:security_question]).present?
+        "security_answer"
+      elsif (job[:TokenMethod] || job[:token_method]).present?
+        "token_choice"
+      elsif Provider::Sophtron.job_token_input_required?(job)
+        "token_input"
+      end
+    end
+
     def render_connection_timeout
       @poll_attempt = connection_status_max_polls if @poll_attempt.to_i > connection_status_max_polls
       @poll_attempt = 1 if @poll_attempt.to_i < 1
@@ -1167,7 +1235,12 @@ class SophtronItemsController < ApplicationController
     def login_progress_job_payload?(job_payload)
       job = (job_payload || {}).with_indifferent_access
       last_status = job[:LastStatus] || job[:last_status]
-      return false if Provider::Sophtron.failure_job_status?(last_status)
+      # Only a genuine failure (SuccessFlag==false) stops the "still connecting" window.
+      # Don't use the string-only failure_job_status? here: "Completed" is in
+      # FAILURE_JOB_STATUSES, but Sophtron reports Completed (SuccessFlag=null) for ~60-80s
+      # while accounts materialize. Treating that as failure dropped the cap to the short
+      # default and timed the connect out before AccountsReady.
+      return false if Provider::Sophtron.job_failed?(job)
 
       job[:LastStep].present? || job[:last_step].present? || last_status.present?
     end
@@ -1186,7 +1259,10 @@ class SophtronItemsController < ApplicationController
         select_accounts_sophtron_items_path(connection_context_params.except(:post_mfa, "post_mfa")),
         heading: t("sophtron_items.api_error.institution_unable_to_connect"),
         issue_keys: %w[bad_credentials verification_code institution_timeout unsupported_mfa],
-        action_label: t("sophtron_items.api_error.try_again")
+        action_label: t("sophtron_items.api_error.try_again"),
+        # Retry re-enters the connect flow, which renders layout: false. Load it into the
+        # modal frame rather than full-navigating to a layout-less fragment (white screen).
+        action_data: { turbo_frame: "modal" }
       )
     end
 
@@ -1197,14 +1273,15 @@ class SophtronItemsController < ApplicationController
       t("sophtron_items.connection_status.failed")
     end
 
-    def render_api_error(message, return_path, heading: nil, issue_keys: nil, action_label: nil)
+    def render_api_error(message, return_path, heading: nil, issue_keys: nil, action_label: nil, action_data: nil)
       render partial: "sophtron_items/api_error",
              locals: {
                error_message: message,
                return_path: return_path,
                heading: heading,
                issue_keys: issue_keys,
-               action_label: action_label
+               action_label: action_label,
+               action_data: action_data
              },
              layout: false
     end
