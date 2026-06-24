@@ -243,7 +243,7 @@ class Provider::SophtronTest < ActiveSupport::TestCase
 
   test "refreshes user institution with documented V1 body" do
     stub_request(:post, "https://api.sophtron.com/api/UserInstitution/RefreshUserInstitution")
-      .with(body: hash_including({ UserInstitutionID: "ui-1" }))
+      .with(body: { UserInstitutionID: "ui-1", aggregate: true, balance: true, identity: false, verification: false, rewards: false, history: false }.to_json)
       .to_return(status: 200, body: { JobID: "job-refresh", UserInstitutionID: "ui-1", MemberID: "mem-1" }.to_json)
 
     result = provider_data(@provider.refresh_user_institution("ui-1"))
