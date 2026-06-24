@@ -326,6 +326,48 @@ class Provider::Sophtron < Provider
     end
   end
 
+  # POST /api/UserInstitution/CreateUserInstitutionWithFullHistory
+  def create_user_institution_with_full_history(institution_id:, username:, password:, pin: "")
+    with_provider_response do
+      request(
+        :post,
+        "/UserInstitution/CreateUserInstitutionWithFullHistory",
+        body: {
+          aggregate: true,
+          identity: false,
+          verification: false,
+          balance: false,
+          rewards: false,
+          history: true,
+          UserID: user_id,
+          InstitutionID: institution_id,
+          UserName: username,
+          Password: password,
+          PIN: pin.to_s
+        }
+      )
+    end
+  end
+
+  # POST /api/UserInstitution/RefreshUserInstitutionFullHistory
+  def refresh_user_institution_full_history(user_institution_id)
+    with_provider_response do
+      request(
+        :post,
+        "/UserInstitution/RefreshUserInstitutionFullHistory",
+        body: {
+          UserInstitutionID: user_institution_id,
+          aggregate: true,
+          identity: false,
+          verification: false,
+          balance: true,
+          rewards: false,
+          history: true
+        }
+      )
+    end
+  end
+
   def poll_job(job_id, **)
     get_job_information(job_id)
   end

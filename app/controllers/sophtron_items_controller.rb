@@ -96,13 +96,13 @@ class SophtronItemsController < ApplicationController
     item.ensure_customer!
 
     # Reuse path: the existing UserInstitution already has the correct credentials on Sophtron's
-    # side.  Calling RefreshUserInstitution returns the SAME UserInstitutionID and account_id
-    # (verified against the live API) plus a new JobID — true reuse, no orphaning.
+    # side.  Calling RefreshUserInstitutionFullHistory returns the SAME UserInstitutionID and
+    # account_id (verified against the live API) plus a new JobID — true reuse, no orphaning.
     # update_user_institution is intentionally NOT called here: it mints a NEW UserInstitution
     # on Sophtron's backend, which would orphan the old one and all its transactions.
     job_id, user_institution_id, raw_response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
       refresh_response = sophtron_response_data!(
-        item.sophtron_provider.refresh_user_institution(item.user_institution_id)
+        item.sophtron_provider.refresh_user_institution_full_history(item.user_institution_id)
       ).with_indifferent_access
 
       # Always keep the existing UID — never adopt whatever the response echoes back,
@@ -113,9 +113,9 @@ class SophtronItemsController < ApplicationController
         refresh_response
       ]
     else
-      # New institution path: create a fresh UserInstitution.
+      # New institution path: create a fresh UserInstitution with full history retrieval.
       create_response = sophtron_response_data!(
-        item.sophtron_provider.create_user_institution(
+        item.sophtron_provider.create_user_institution_with_full_history(
           institution_id: params[:institution_id],
           username: params[:bank_username],
           password: params[:bank_password],
