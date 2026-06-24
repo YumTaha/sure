@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-24
 **Branch:** `feat/sophtron-v1-expansion`
-**Status:** Design spec — not yet implemented
+**Status:** Phase 1 SHIPPED (PR #8, merged to main as `6f2ac75a`); Phases 2-4 pending.
 
 ---
 
@@ -216,24 +216,20 @@ Response (200):
 
 ## Phased implementation plan
 
-Each phase ships as its own branch + PR + Copilot review before the next phase begins.
+Each phase ships as its own branch + PR + Copilot review before the next phase begins. The "one PR for all phases vs PR-per-phase" decision was resolved as **PR-per-phase** — Phase 1 shipped as its own PR #8.
 
-### Phase 1 — Full transaction history (highest value; foundational)
+### Phase 1 — Full transaction history (highest value; foundational) ✅ SHIPPED
+
+**Shipped:** PR #8, merge commit `6f2ac75a`, feature commit `ee49c450`.
 
 **Goal:** Replace the plain create/refresh calls with their full-history equivalents so both initial connect and every subsequent reconnect pull complete transaction history.
 
-**Provider changes:**
-- Add `create_user_institution_with_full_history(user_id:, institution_id:, username:, password:)` — wraps `POST /api/UserInstitution/CreateUserInstitutionWithFullHistory` with `history: true, aggregate: true`.
-- Add `refresh_user_institution_full_history(user_institution_id)` — wraps `POST /api/UserInstitution/RefreshUserInstitutionFullHistory` with `history: true, aggregate: true`.
+**What shipped:**
+- Added `create_user_institution_with_full_history` and `refresh_user_institution_full_history` to `app/models/provider/sophtron.rb`.
+- `connect_institution` now calls the full-history create for new connections; the de-dup reuse path (reconnect) still calls `refresh_user_institution` with the preserved UID — this is intentional (reconnect reuses the existing `UserInstitution`, so no full-history create is needed there).
+- Initial transaction fetch window widened from 120 days to 3 years.
 
-**Controller / wiring changes:**
-- In `connect_institution`: replace `create_user_institution(...)` with `create_user_institution_with_full_history(...)` for new connections.
-- Replace `refresh_user_institution(uid)` calls with `refresh_user_institution_full_history(uid)` for reconnect/re-sync.
-- Preserve the shipped de-dup reuse logic (reuse existing `UserInstitution` on reconnect, keep UID). Phase 1 changes only WHICH endpoint is called once the UID is determined, not the de-dup decision logic.
-
-**Tests:** Minitest with mocked provider; verify correct endpoint called on create vs. reconnect paths. No new DB migration required.
-
-**Coupling note:** This touches `connect_institution` in the same code region as the de-dup branch. Merge de-dup branch before branching for Phase 1, or rebase carefully.
+**Tests:** Minitest with mocked provider; correct endpoint verified on create vs. reconnect paths. No DB migration required.
 
 ---
 

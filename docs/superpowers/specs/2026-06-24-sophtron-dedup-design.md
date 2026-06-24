@@ -2,6 +2,7 @@
 
 **Date:** 2026-06-24
 **Branch:** `feat/sophtron-dedup`
+**Status:** SHIPPED (PR #5, merged to main). Both (a) reuse-on-reconnect and (b) delete-on-disconnect are live.
 **API version:** Sophtron v1 (legacy) — v2 migration is out of scope
 
 ---
