@@ -504,7 +504,32 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     @item.reload
     assert_equal "requires_update", @item.status
     assert_nil @item.current_job_id
-    assert_nil @item.user_institution_id
+    # The existing user_institution_id must be preserved so a subsequent reconnect
+    # goes through the reuse path instead of minting a new UserInstitution.
+    assert_equal "ui-1", @item.user_institution_id
+  end
+
+  test "connection_status preserves user_institution_id when job fails outside manual sync" do
+    @item.update!(user_institution_id: "ui-preserved", current_job_id: "job-fail")
+    provider = mock
+    provider.expects(:get_job_information).with("job-fail").returns({
+      AccountID: "00000000-0000-0000-0000-000000000000",
+      JobType: "AddAccounts",
+      JobID: "job-fail",
+      SuccessFlag: false,
+      LastStatus: "Timeout"
+    })
+
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    get connection_status_sophtron_item_url(@item)
+
+    assert_response :success
+    @item.reload
+    assert_equal "requires_update", @item.status
+    assert_nil @item.current_job_id
+    # UID must survive the failure — never nil — so the next reconnect reuses it.
+    assert_equal "ui-preserved", @item.user_institution_id
   end
 
   test "submit_mfa sends security answer as array string" do
@@ -948,7 +973,10 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to accounts_path
   end
 
-  # (a) Reuse-on-reconnect: existing institution item is reused, not duplicated
+  # (a) Reuse-on-reconnect: existing institution item is reused, not duplicated.
+  # refresh_user_institution returns the SAME UserInstitutionID + a new JobID (verified
+  # against the live Sophtron API).  update_user_institution must NOT be called because
+  # it mints a NEW UserInstitution, orphaning the old one and its transactions.
   test "connect_institution reuses existing item when reconnecting same institution" do
     @item.update!(
       institution_id: "bank-inst",
@@ -958,17 +986,13 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     )
 
     provider = mock
-    provider.expects(:update_user_institution).with(
-      "ui-existing",
-      username: "bank-user",
-      password: "bank-pass",
-      pin: ""
-    ).returns({})
+    # Only refresh is allowed on the reuse path — update and create must never fire.
     provider.expects(:refresh_user_institution).with("ui-existing").returns({
       JobID: "job-refresh",
       UserInstitutionID: "ui-existing",
       MemberID: "mem-1"
     })
+    provider.expects(:update_user_institution).never
     provider.expects(:create_user_institution).never
 
     SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
@@ -985,6 +1009,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     end
 
     @item.reload
+    # The existing UID must be unchanged — never adopt a UID from the API response.
     assert_equal "ui-existing", @item.user_institution_id
     assert_equal "job-refresh", @item.current_job_id
     assert_redirected_to connection_status_sophtron_item_path(@item, connect_new_institution: "true")

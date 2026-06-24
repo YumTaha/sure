@@ -95,23 +95,26 @@ class SophtronItemsController < ApplicationController
     item = item_for_institution_connection(@sophtron_item)
     item.ensure_customer!
 
-    response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
-      # Reuse path: update credentials on the existing UserInstitution, then
-      # re-run aggregation to get a new job ID.
-      sophtron_response_data!(
-        item.sophtron_provider.update_user_institution(
-          item.user_institution_id,
-          username: params[:bank_username],
-          password: params[:bank_password],
-          pin: ""
-        )
-      )
-      sophtron_response_data!(
+    # Reuse path: the existing UserInstitution already has the correct credentials on Sophtron's
+    # side.  Calling RefreshUserInstitution returns the SAME UserInstitutionID and account_id
+    # (verified against the live API) plus a new JobID — true reuse, no orphaning.
+    # update_user_institution is intentionally NOT called here: it mints a NEW UserInstitution
+    # on Sophtron's backend, which would orphan the old one and all its transactions.
+    job_id, user_institution_id, raw_response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
+      refresh_response = sophtron_response_data!(
         item.sophtron_provider.refresh_user_institution(item.user_institution_id)
       ).with_indifferent_access
+
+      # Always keep the existing UID — never adopt whatever the response echoes back,
+      # since the whole point is that the UID must not change on reconnect.
+      [
+        refresh_response[:JobID] || refresh_response[:job_id],
+        item.user_institution_id,
+        refresh_response
+      ]
     else
       # New institution path: create a fresh UserInstitution.
-      sophtron_response_data!(
+      create_response = sophtron_response_data!(
         item.sophtron_provider.create_user_institution(
           institution_id: params[:institution_id],
           username: params[:bank_username],
@@ -119,10 +122,13 @@ class SophtronItemsController < ApplicationController
           pin: ""
         )
       ).with_indifferent_access
-    end
 
-    job_id = response[:JobID] || response[:job_id]
-    user_institution_id = response[:UserInstitutionID] || response[:user_institution_id] || item.user_institution_id
+      [
+        create_response[:JobID] || create_response[:job_id],
+        create_response[:UserInstitutionID] || create_response[:user_institution_id],
+        create_response
+      ]
+    end
 
     if job_id.blank? || user_institution_id.blank?
       raise Provider::Sophtron::Error.new("Sophtron did not return JobID and UserInstitutionID", :invalid_response)
@@ -134,7 +140,7 @@ class SophtronItemsController < ApplicationController
       institution_name: params[:institution_name],
       user_institution_id: user_institution_id,
       current_job_id: job_id,
-      raw_job_payload: response,
+      raw_job_payload: raw_response,
       job_status: nil,
       last_connection_error: nil,
       status: :good
@@ -196,10 +202,13 @@ class SophtronItemsController < ApplicationController
       render_pending_connection_status
     elsif Provider::Sophtron.job_failed?(job)
       failure_message = sophtron_connection_failure_message(job)
+      # Always preserve the existing user_institution_id on failure so that a subsequent
+      # reconnect attempt goes through the reuse path (refresh_user_institution) rather
+      # than minting a brand-new UserInstitution on Sophtron's backend.
       @sophtron_item.update!(
         current_job_id: nil,
         current_job_sophtron_account_id: nil,
-        user_institution_id: (manual_sync_flow? ? @sophtron_item.user_institution_id : nil),
+        user_institution_id: @sophtron_item.user_institution_id,
         last_connection_error: failure_message,
         status: :requires_update
       )
