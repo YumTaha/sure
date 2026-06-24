@@ -47,8 +47,7 @@ existing = Current.family.sophtron_items.find_by(institution_id: params[:institu
 **New provider method required:**
 
 - `delete_user_institution(user_institution_id)` → `POST /api/UserInstitution/DeleteUserInstitution`
-  - Request body: `{ userInstitutionID: <id> }`
-
+  - Request body: `{ UserInstitutionID: <id> }`
 **Behavior:**
 
 - Best-effort: call the remote delete before removing the local record.
