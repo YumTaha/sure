@@ -398,7 +398,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     get connection_status_sophtron_item_url(@item, poll_attempt: SophtronItemsController::CONNECTION_STATUS_MAX_POLLS, post_mfa: true)
 
     assert_response :success
-    assert_includes response.body, "Attempt #{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS} of 15"
+    assert_includes response.body, "Attempt #{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS} of #{SophtronItemsController::POST_MFA_CONNECTION_STATUS_MAX_POLLS}"
     assert_includes response.body, "poll_attempt=#{SophtronItemsController::CONNECTION_STATUS_MAX_POLLS + 1}"
     assert_not_includes response.body, "Sophtron did not finish connecting"
   end
@@ -592,6 +592,32 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     }
 
     assert_redirected_to connection_status_sophtron_item_path(@item, post_mfa: true)
+  end
+
+  test "connection_status keeps polling silently instead of re-prompting the same MFA within the grace window" do
+    @item.update!(user_institution_id: "ui-1", current_job_id: "job-1")
+    provider = mock
+    provider.stubs(:update_job_token_input).returns({})
+    # Sophtron lags after the submit: still reports the TokenInput step with the value not yet registered.
+    provider.stubs(:get_job_information).with("job-1").returns({
+      AccountID: "00000000-0000-0000-0000-000000000000",
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      TokenInput: "",
+      TokenSentFlag: true,
+      LastStep: "TokenInput",
+      LastStatus: "Started"
+    })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    # Answer the code, then poll again while Sophtron still reports the same challenge.
+    post submit_mfa_sophtron_item_url(@item), params: { mfa_type: "token_input", token_input: "123456" }
+    get connection_status_sophtron_item_url(@item, post_mfa: true, poll_attempt: 2)
+
+    assert_response :success
+    # Should show the "still connecting" pending view, NOT re-render the MFA code form.
+    assert_includes response.body, "Sophtron is still connecting"
+    assert_not_includes response.body, "submit_mfa"
   end
 
   test "toggle_manual_sync marks linked Sophtron institution accounts manual" do
