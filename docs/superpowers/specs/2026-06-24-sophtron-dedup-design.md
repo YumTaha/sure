@@ -76,7 +76,7 @@ Framework: Minitest + fixtures + mocha. All provider calls are mocked — no liv
 
 | # | Scenario | Assertion |
 |---|----------|-----------|
-| 1 | Reconnecting an institution that already has a `SophtronItem` | Reuses the existing item: `SophtronItem.count` unchanged; `update_user_institution` called once; `create_user_institution` NOT called. |
+| 1 | Reconnecting an institution that already has a `SophtronItem` | Reuses the existing item: `SophtronItem.count` unchanged; `refresh_user_institution` called once; `create_user_institution` NOT called. |
 | 2 | Connecting a brand-new institution | Creates exactly one new `SophtronItem`; `create_user_institution` called once. |
 | 3 | Destroy — happy path | `delete_user_institution(uiid)` called; local record destroyed. |
 | 4 | Destroy — API error | Local record still destroyed; `DebugLogEntry` created with relevant metadata. |
