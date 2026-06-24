@@ -367,6 +367,50 @@ class SophtronItem::ImporterTest < ActiveSupport::TestCase
                "raw_transactions_payload must stay nil — persisting [] would wedge the account"
   end
 
+  # Phase 1 full-history: initial transaction fetch uses the full history window
+  # (MAX_TRANSACTION_HISTORY_YEARS back), NOT the old 120-day default.
+  test "initial fetch uses full history window instead of narrow 120-day default" do
+    account = accounts(:depository)
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-1",
+      name: "Checking",
+      currency: "USD",
+      balance: 100
+    )
+    AccountProvider.create!(account: account, provider: sophtron_account)
+
+    expected_start = SophtronItem::MAX_TRANSACTION_HISTORY_YEARS.years.ago.to_date
+    narrow_start = SophtronItem::INITIAL_LOAD_LOOKBACK_DAYS.days.ago.to_date
+
+    actual_start = nil
+
+    provider = mock
+    provider.expects(:get_accounts).with("ui-1").returns({
+      accounts: [
+        {
+          account_id: "acct-1",
+          account_name: "Checking",
+          balance: "100.00",
+          balance_currency: "USD",
+          currency: "USD"
+        }.with_indifferent_access
+      ],
+      total: 1
+    })
+    provider.expects(:get_account_transactions).with("acct-1", start_date: anything) do |_account_id, start_date:|
+      actual_start = start_date
+      true
+    end.returns({ transactions: [], total: 0 })
+
+    SophtronItem::Importer.new(@item, sophtron_provider: provider).import
+
+    assert_not_nil actual_start
+    assert actual_start <= expected_start,
+           "initial fetch start date #{actual_start} should be at or before #{expected_start} (full history)"
+    assert actual_start < narrow_start,
+           "initial fetch start date #{actual_start} must be earlier than the old 120-day window #{narrow_start}"
+  end
+
   # Sophtron vendor lag fix: empty transaction response must NOT persist [] snapshot.
   # Storing [] would flip raw_transactions_payload from nil to non-nil, permanently
   # wedging initial_transaction_fetch? to false and making the account unable to

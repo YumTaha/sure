@@ -85,7 +85,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
 
   test "connect_institution persists job and user institution ids" do
     provider = mock
-    provider.expects(:create_user_institution).with(
+    provider.expects(:create_user_institution_with_full_history).with(
       institution_id: "inst-1",
       username: "bank-user",
       password: "bank-pass",
@@ -132,7 +132,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     )
 
     provider = mock
-    provider.expects(:create_user_institution).with(
+    provider.expects(:create_user_institution_with_full_history).with(
       institution_id: "amazon-inst",
       username: "bank-user",
       password: "bank-pass",
@@ -1077,9 +1077,9 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
   end
 
   # (a) Reuse-on-reconnect: existing institution item is reused, not duplicated.
-  # refresh_user_institution returns the SAME UserInstitutionID + a new JobID (verified
-  # against the live Sophtron API).  update_user_institution must NOT be called because
-  # it mints a NEW UserInstitution, orphaning the old one and its transactions.
+  # refresh_user_institution_full_history returns the SAME UserInstitutionID + a new JobID
+  # (verified against the live Sophtron API).  update_user_institution must NOT be called
+  # because it mints a NEW UserInstitution, orphaning the old one and its transactions.
   test "connect_institution reuses existing item when reconnecting same institution" do
     @item.update!(
       institution_id: "bank-inst",
@@ -1089,14 +1089,14 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     )
 
     provider = mock
-    # Only refresh is allowed on the reuse path — update and create must never fire.
-    provider.expects(:refresh_user_institution).with("ui-existing").returns({
+    # Only refresh_user_institution_full_history is allowed on the reuse path.
+    provider.expects(:refresh_user_institution_full_history).with("ui-existing").returns({
       JobID: "job-refresh",
       UserInstitutionID: "ui-existing",
       MemberID: "mem-1"
     })
     provider.expects(:update_user_institution).never
-    provider.expects(:create_user_institution).never
+    provider.expects(:create_user_institution_with_full_history).never
 
     SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
     SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
@@ -1118,7 +1118,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to connection_status_sophtron_item_path(@item, connect_new_institution: "true")
   end
 
-  # (a) Brand-new institution still creates a new SophtronItem
+  # (a) Brand-new institution still creates a new SophtronItem via the full-history endpoint
   test "connect_institution creates new item when institution is not yet known to the family" do
     @item.update!(
       institution_id: "apple-inst",
@@ -1134,7 +1134,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     )
 
     provider = mock
-    provider.expects(:create_user_institution).with(
+    provider.expects(:create_user_institution_with_full_history).with(
       institution_id: "brand-new-inst",
       username: "bank-user",
       password: "bank-pass",
@@ -1144,7 +1144,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
       UserInstitutionID: "ui-new"
     })
     provider.expects(:update_user_institution).never
-    provider.expects(:refresh_user_institution).never
+    provider.expects(:refresh_user_institution_full_history).never
 
     SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
     SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
@@ -1162,6 +1162,68 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     new_item = @user.family.sophtron_items.find_by!(user_institution_id: "ui-new")
     assert_equal "job-new", new_item.current_job_id
     assert_equal "Brand New Bank", new_item.institution_name
+  end
+
+  # Phase 1 full-history: new institution calls create_user_institution_with_full_history
+  test "connect_institution calls create_user_institution_with_full_history for new institution" do
+    provider = mock
+    provider.expects(:create_user_institution_with_full_history).with(
+      institution_id: "new-inst",
+      username: "user",
+      password: "pass",
+      pin: ""
+    ).returns({ JobID: "job-fh", UserInstitutionID: "ui-fh" })
+    provider.expects(:create_user_institution).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    post connect_institution_sophtron_item_url(@item), params: {
+      institution_id: "new-inst",
+      institution_name: "New Bank",
+      bank_username: "user",
+      bank_password: "pass"
+    }
+
+    @item.reload
+    assert_equal "ui-fh", @item.user_institution_id
+    assert_equal "job-fh", @item.current_job_id
+  end
+
+  # Phase 1 full-history: reconnect calls refresh_user_institution_full_history and keeps UID
+  test "connect_institution calls refresh_user_institution_full_history on reconnect and preserves uid" do
+    @item.update!(
+      institution_id: "my-bank",
+      institution_name: "My Bank",
+      user_institution_id: "ui-kept",
+      status: :requires_update
+    )
+
+    provider = mock
+    provider.expects(:refresh_user_institution_full_history).with("ui-kept").returns({
+      JobID: "job-fh-refresh",
+      UserInstitutionID: "ui-kept",
+      MemberID: "mem-1"
+    })
+    provider.expects(:refresh_user_institution).never
+    provider.expects(:create_user_institution_with_full_history).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    assert_no_difference -> { @user.family.sophtron_items.count } do
+      post connect_institution_sophtron_item_url(@item), params: {
+        institution_id: "my-bank",
+        institution_name: "My Bank",
+        bank_username: "user",
+        bank_password: "pass"
+      }
+    end
+
+    @item.reload
+    # UID must be preserved — never adopt whatever the API echoes back
+    assert_equal "ui-kept", @item.user_institution_id
+    assert_equal "job-fh-refresh", @item.current_job_id
   end
 
   # (b) destroy calls delete_remote! with the item's user_institution_id

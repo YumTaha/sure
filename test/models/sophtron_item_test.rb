@@ -234,6 +234,34 @@ class SophtronItemTest < ActiveSupport::TestCase
     assert_nothing_raised { @item.delete_remote! }
   end
 
+  # Phase 1 full-history: initial_load_window_start_date should use the full history
+  # window (MAX_TRANSACTION_HISTORY_YEARS back) so that CreateUserInstitutionWithFullHistory
+  # actually fetches all available history, not just the old 120-day default.
+  test "initial_load_window_start_date defaults to max history window not 120 days" do
+    # No sync_start_date configured — should default to MAX_TRANSACTION_HISTORY_YEARS
+    expected = SophtronItem::MAX_TRANSACTION_HISTORY_YEARS.years.ago.to_date
+    narrow   = SophtronItem::INITIAL_LOAD_LOOKBACK_DAYS.days.ago.to_date
+
+    result = @item.initial_load_window_start_date
+
+    assert_equal expected, result,
+                 "expected full history start #{expected}, got #{result}"
+    assert result < narrow,
+           "initial load window #{result} must be earlier than the old narrow #{narrow}"
+  end
+
+  test "initial_load_window_start_date honours configured sync_start_date" do
+    configured = 1.year.ago.to_date
+    @item.update!(sync_start_date: configured)
+    max_history = SophtronItem::MAX_TRANSACTION_HISTORY_YEARS.years.ago.to_date
+
+    result = @item.initial_load_window_start_date
+
+    # [ configured || max_history, max_history ].max — configured is more recent than
+    # max_history so it wins.
+    assert_equal [ configured, max_history ].max, result
+  end
+
   test "delete_remote! records a DebugLogEntry and does not raise when provider call fails" do
     @item.update!(user_institution_id: "ui-bad")
     provider = mock

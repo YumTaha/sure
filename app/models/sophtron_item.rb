@@ -67,7 +67,7 @@ class SophtronItem < ApplicationRecord
   #
   # Skipped entirely when +user_institution_id+ is blank (item was never fully
   # connected to Sophtron).
-def delete_remote!
+  def delete_remote!
     return if user_institution_id.blank?
 
     provider = sophtron_provider
@@ -89,7 +89,7 @@ def delete_remote!
         error_message: e.message
       }
     )
-  end
+    end
 
   # Imports the latest account and transaction data from Sophtron.
   #
@@ -216,10 +216,13 @@ def delete_remote!
 
   def initial_load_window_start_date
     configured_start = sync_start_date&.to_date
-    default_start = INITIAL_LOAD_LOOKBACK_DAYS.days.ago.to_date
     max_history_start = MAX_TRANSACTION_HISTORY_YEARS.years.ago.to_date
 
-    [ configured_start || default_start, max_history_start ].max
+    # Use the full history window for the initial load so that
+    # CreateUserInstitutionWithFullHistory actually retrieves all available
+    # history (up to MAX_TRANSACTION_HISTORY_YEARS back).  A user-configured
+    # sync_start_date is honoured and floored at max_history_start.
+    [ configured_start || max_history_start, max_history_start ].max
   end
 
   def upsert_sophtron_snapshot!(accounts_snapshot)

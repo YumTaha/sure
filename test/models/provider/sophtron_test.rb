@@ -252,6 +252,52 @@ class Provider::SophtronTest < ActiveSupport::TestCase
     assert_equal "ui-1", result[:UserInstitutionID]
   end
 
+  test "creates user institution with full history with correct flags" do
+    stub_request(:post, "https://api.sophtron.com/api/UserInstitution/CreateUserInstitutionWithFullHistory")
+      .with(body: {
+        aggregate: true,
+        identity: false,
+        verification: false,
+        balance: false,
+        rewards: false,
+        history: true,
+        UserID: "developer-user",
+        InstitutionID: "inst-1",
+        UserName: "bank-user",
+        Password: "bank-pass",
+        PIN: ""
+      }.to_json)
+      .to_return(status: 200, body: { JobID: "job-fh", UserInstitutionID: "ui-fh", MemberID: "mem-fh" }.to_json)
+
+    result = provider_data(@provider.create_user_institution_with_full_history(
+      institution_id: "inst-1",
+      username: "bank-user",
+      password: "bank-pass"
+    ))
+
+    assert_equal "job-fh", result[:JobID]
+    assert_equal "ui-fh", result[:UserInstitutionID]
+  end
+
+  test "refreshes user institution full history with aggregate and history flags" do
+    stub_request(:post, "https://api.sophtron.com/api/UserInstitution/RefreshUserInstitutionFullHistory")
+      .with(body: {
+        UserInstitutionID: "ui-1",
+        aggregate: true,
+        identity: false,
+        verification: false,
+        balance: true,
+        rewards: false,
+        history: true
+      }.to_json)
+      .to_return(status: 200, body: { JobID: "job-rfh", UserInstitutionID: "ui-1", MemberID: "mem-1" }.to_json)
+
+    result = provider_data(@provider.refresh_user_institution_full_history("ui-1"))
+
+    assert_equal "job-rfh", result[:JobID]
+    assert_equal "ui-1", result[:UserInstitutionID]
+  end
+
   private
 
     def provider_data(response)
