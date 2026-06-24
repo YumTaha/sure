@@ -88,7 +88,7 @@ Framework: Minitest + fixtures + mocha. All provider calls are mocked — no liv
 
 | Scenario | Handling |
 |----------|----------|
-| Existing item is in an error state | Reuse path calls `update_user_institution` + re-aggregation, which recovers the connection. |
+| Existing item is in an error state | Reuse path calls `refresh_user_institution` to re-run aggregation and recover the connection. |
 | Item with `nil` `user_institution_id` (never fully connected) | Local-only delete; skip remote call. |
 | MFA required during reconnect | Reuse path feeds into the same job/poll/MFA flow as a new connection — no special handling needed. |
 
