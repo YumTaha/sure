@@ -947,4 +947,120 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "SophtronAccount", account.account_providers.first.provider_type
     assert_redirected_to accounts_path
   end
+
+  # (a) Reuse-on-reconnect: existing institution item is reused, not duplicated
+  test "connect_institution reuses existing item when reconnecting same institution" do
+    @item.update!(
+      institution_id: "bank-inst",
+      institution_name: "Example Bank",
+      user_institution_id: "ui-existing",
+      status: :good
+    )
+
+    provider = mock
+    provider.expects(:update_user_institution).with(
+      "ui-existing",
+      username: "bank-user",
+      password: "bank-pass",
+      pin: ""
+    ).returns({})
+    provider.expects(:refresh_user_institution).with("ui-existing").returns({
+      JobID: "job-refresh",
+      UserInstitutionID: "ui-existing",
+      MemberID: "mem-1"
+    })
+    provider.expects(:create_user_institution).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    assert_no_difference -> { @user.family.sophtron_items.count } do
+      post connect_institution_sophtron_item_url(@item), params: {
+        institution_id: "bank-inst",
+        institution_name: "Example Bank",
+        bank_username: "bank-user",
+        bank_password: "bank-pass",
+        connect_new_institution: true
+      }
+    end
+
+    @item.reload
+    assert_equal "ui-existing", @item.user_institution_id
+    assert_equal "job-refresh", @item.current_job_id
+    assert_redirected_to connection_status_sophtron_item_path(@item, connect_new_institution: "true")
+  end
+
+  # (a) Brand-new institution still creates a new SophtronItem
+  test "connect_institution creates new item when institution is not yet known to the family" do
+    @item.update!(
+      institution_id: "apple-inst",
+      institution_name: "Apple / Goldman Sachs",
+      user_institution_id: "ui-apple",
+      status: :good
+    )
+    @item.sophtron_accounts.create!(
+      name: "Apple Card",
+      account_id: "card-1",
+      currency: "USD",
+      balance: 500
+    )
+
+    provider = mock
+    provider.expects(:create_user_institution).with(
+      institution_id: "brand-new-inst",
+      username: "bank-user",
+      password: "bank-pass",
+      pin: ""
+    ).returns({
+      JobID: "job-new",
+      UserInstitutionID: "ui-new"
+    })
+    provider.expects(:update_user_institution).never
+    provider.expects(:refresh_user_institution).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    assert_difference -> { @user.family.sophtron_items.count }, 1 do
+      post connect_institution_sophtron_item_url(@item), params: {
+        institution_id: "brand-new-inst",
+        institution_name: "Brand New Bank",
+        bank_username: "bank-user",
+        bank_password: "bank-pass",
+        connect_new_institution: true
+      }
+    end
+
+    new_item = @user.family.sophtron_items.find_by!(user_institution_id: "ui-new")
+    assert_equal "job-new", new_item.current_job_id
+    assert_equal "Brand New Bank", new_item.institution_name
+  end
+
+  # (b) destroy calls delete_remote! with the item's user_institution_id
+  test "destroy calls delete_user_institution on the Sophtron provider" do
+    @item.update!(user_institution_id: "ui-to-delete")
+    provider = mock
+    provider.expects(:delete_user_institution).with("ui-to-delete").returns({})
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    delete sophtron_item_url(@item)
+
+    assert_redirected_to accounts_path
+    assert @item.reload.scheduled_for_deletion
+  end
+
+  # (b) destroy proceeds with local removal even when remote delete fails
+  test "destroy still destroys locally when delete_user_institution raises" do
+    @item.update!(user_institution_id: "ui-bad")
+    provider = mock
+    provider.expects(:delete_user_institution).with("ui-bad").raises(Provider::Sophtron::Error.new("timeout", :request_failed))
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    assert_difference "DebugLogEntry.count", 1 do
+      delete sophtron_item_url(@item)
+    end
+
+    assert_redirected_to accounts_path
+    assert @item.reload.scheduled_for_deletion
+  end
 end

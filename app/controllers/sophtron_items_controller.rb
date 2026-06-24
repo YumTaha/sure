@@ -94,17 +94,35 @@ class SophtronItemsController < ApplicationController
 
     item = item_for_institution_connection(@sophtron_item)
     item.ensure_customer!
-    response = sophtron_response_data!(
-      item.sophtron_provider.create_user_institution(
-        institution_id: params[:institution_id],
-        username: params[:bank_username],
-        password: params[:bank_password],
-        pin: ""
+
+    response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
+      # Reuse path: update credentials on the existing UserInstitution, then
+      # re-run aggregation to get a new job ID.
+      sophtron_response_data!(
+        item.sophtron_provider.update_user_institution(
+          item.user_institution_id,
+          username: params[:bank_username],
+          password: params[:bank_password],
+          pin: ""
+        )
       )
-    ).with_indifferent_access
+      sophtron_response_data!(
+        item.sophtron_provider.refresh_user_institution(item.user_institution_id)
+      ).with_indifferent_access
+    else
+      # New institution path: create a fresh UserInstitution.
+      sophtron_response_data!(
+        item.sophtron_provider.create_user_institution(
+          institution_id: params[:institution_id],
+          username: params[:bank_username],
+          password: params[:bank_password],
+          pin: ""
+        )
+      ).with_indifferent_access
+    end
 
     job_id = response[:JobID] || response[:job_id]
-    user_institution_id = response[:UserInstitutionID] || response[:user_institution_id]
+    user_institution_id = response[:UserInstitutionID] || response[:user_institution_id] || item.user_institution_id
 
     if job_id.blank? || user_institution_id.blank?
       raise Provider::Sophtron::Error.new("Sophtron did not return JobID and UserInstitutionID", :invalid_response)
@@ -427,6 +445,7 @@ class SophtronItemsController < ApplicationController
       Rails.logger.warn("Sophtron unlink during destroy failed: #{e.class} - #{e.message}")
     end
 
+    @sophtron_item.delete_remote!
     @sophtron_item.destroy_later
     redirect_to accounts_path, notice: t(".success")
   end
@@ -983,6 +1002,14 @@ class SophtronItemsController < ApplicationController
     end
 
     def item_for_institution_connection(item)
+      # When adding a new institution, first check whether the family already
+      # has a SophtronItem for the requested institution — if so, reuse it
+      # instead of creating a duplicate.
+      if connect_new_institution_flow? && params[:institution_id].present?
+        existing = Current.family.sophtron_items.find_by(institution_id: params[:institution_id])
+        return existing if existing.present?
+      end
+
       return item unless connect_new_institution_flow? && should_create_sophtron_item_for_new_institution?(item)
 
       Current.family.sophtron_items.create!(
