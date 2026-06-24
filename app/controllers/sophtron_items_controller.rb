@@ -212,9 +212,12 @@ class SophtronItemsController < ApplicationController
         return
       end
 
-      if post_mfa_polling?
-        return if render_account_selection_if_accounts_available(@sophtron_item)
-      end
+      # Sophtron reports LastStatus=Completed on LogInPanel ~60-80s before AccountsReady,
+      # so job_success? hasn't fired yet. Whenever the accounts are actually fetchable we
+      # advance to selection — not only after MFA. A push-approval connect (no code, so
+      # post_mfa=false) reaches Completed too; gating this on post_mfa_polling? left it
+      # polling until the cap and timing out, even though the accounts were ready.
+      return if render_account_selection_if_accounts_available(@sophtron_item)
 
       render_pending_connection_status
     elsif Provider::Sophtron.job_failed?(job)
@@ -1229,7 +1232,12 @@ class SophtronItemsController < ApplicationController
     def login_progress_job_payload?(job_payload)
       job = (job_payload || {}).with_indifferent_access
       last_status = job[:LastStatus] || job[:last_status]
-      return false if Provider::Sophtron.failure_job_status?(last_status)
+      # Only a genuine failure (SuccessFlag==false) stops the "still connecting" window.
+      # Don't use the string-only failure_job_status? here: "Completed" is in
+      # FAILURE_JOB_STATUSES, but Sophtron reports Completed (SuccessFlag=null) for ~60-80s
+      # while accounts materialize. Treating that as failure dropped the cap to the short
+      # default and timed the connect out before AccountsReady.
+      return false if Provider::Sophtron.job_failed?(job)
 
       job[:LastStep].present? || job[:last_step].present? || last_status.present?
     end

@@ -444,6 +444,77 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     assert @item.pending_account_setup?
   end
 
+  test "connection_status renders accounts on a completed push-approval connect without MFA" do
+    # Apple Card push-approval: no code is entered (post_mfa absent), but the job still
+    # reaches Completed on LogInPanel with accounts ready. Must advance to selection, not
+    # poll until the cap and time out.
+    @item.update!(user_institution_id: "ui-1", current_job_id: "job-1")
+    provider = mock
+    provider.expects(:get_job_information).with("job-1").returns({
+      AccountID: "00000000-0000-0000-0000-000000000000",
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      LastStep: "LogInPanel",
+      LastStatus: "Completed"
+    })
+    provider.expects(:get_accounts).with("ui-1").returns({
+      accounts: [
+        {
+          id: "acct-1",
+          account_id: "acct-1",
+          account_name: "Apple Card",
+          institution_name: "Apple Card",
+          balance: "50.00",
+          balance_currency: "USD",
+          currency: "USD",
+          status: "active"
+        }.with_indifferent_access
+      ],
+      total: 1
+    })
+
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    get connection_status_sophtron_item_url(@item, poll_attempt: 3)
+
+    assert_response :success
+    assert_includes response.body, "Apple Card"
+    assert_not_includes response.body, "Sophtron did not finish connecting"
+    @item.reload
+    assert_nil @item.current_job_id
+    assert_equal "good", @item.status
+  end
+
+  test "connection_status keeps the long polling window while a completed job awaits accounts" do
+    # Completed (SuccessFlag null) means login is done but accounts are still materializing.
+    # The window must stay long (not drop to the short default) so it doesn't time out early.
+    # Seed raw_job_payload to mimic the prior poll's snapshot (the cap is read from it before
+    # this request fetches the job).
+    @item.update!(
+      user_institution_id: "ui-1",
+      current_job_id: "job-1",
+      job_status: "Completed",
+      raw_job_payload: { JobID: "job-1", LastStep: "LogInPanel", LastStatus: "Completed" }
+    )
+    provider = mock
+    provider.expects(:get_job_information).with("job-1").returns({
+      JobType: "AddAccounts",
+      JobID: "job-1",
+      LastStep: "LogInPanel",
+      LastStatus: "Completed"
+    })
+    provider.expects(:get_accounts).with("ui-1").returns({ accounts: [], total: 0 })
+
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    get connection_status_sophtron_item_url(@item, poll_attempt: 7)
+
+    assert_response :success
+    assert_includes response.body, "of #{SophtronItemsController::LOGIN_PROGRESS_CONNECTION_STATUS_MAX_POLLS}"
+    assert_not_includes response.body, "Sophtron did not finish connecting"
+    assert_equal "job-1", @item.reload.current_job_id
+  end
+
   test "connection_status keeps polling when post mfa completed job has no accounts yet" do
     @item.update!(user_institution_id: "ui-1", current_job_id: "job-1")
     provider = mock
