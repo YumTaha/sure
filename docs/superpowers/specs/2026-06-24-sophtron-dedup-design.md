@@ -28,7 +28,7 @@ existing = Current.family.sophtron_items.find_by(institution_id: params[:institu
 
 | Result | Behavior |
 |--------|----------|
-| Found | Reuse it: update credentials on its existing `UserInstitution` via `update_user_institution`, then re-run aggregation via `refresh_user_institution`. No new `SophtronItem` created. No new Sophtron `UserInstitution` created. Continue into the same poll/MFA flow. |
+| Found | Reuse it: re-run aggregation via `refresh_user_institution` on the existing `UserInstitutionID`. No new `SophtronItem` created. No new Sophtron `UserInstitution` created. Continue into the same poll/MFA flow. |
 | Not found | Current behavior — create a new `SophtronItem` and `UserInstitution`. |
 
 **New provider methods required:**
