@@ -217,7 +217,10 @@ class SophtronItemsController < ApplicationController
       # advance to selection — not only after MFA. A push-approval connect (no code, so
       # post_mfa=false) reaches Completed too; gating this on post_mfa_polling? left it
       # polling until the cap and timing out, even though the accounts were ready.
-      return if render_account_selection_if_accounts_available(@sophtron_item)
+      if render_account_selection_if_accounts_available(@sophtron_item)
+        clear_mfa_answer_grace!
+        return
+      end
 
       render_pending_connection_status
     elsif Provider::Sophtron.job_failed?(job)
