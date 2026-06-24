@@ -44,4 +44,50 @@ class SophtronRefreshPollJobTest < ActiveJob::TestCase
       SophtronRefreshPollJob.perform_now(@sophtron_account, job_id: "refresh-job")
     end
   end
+
+  # Sophtron vendor lag: job reports ready but transactions are not yet materialized.
+  # When the fetch returns 0 and attempts remain, re-enqueue to retry the fetch.
+  test "re-enqueues when job is ready but fetch returns 0 transactions and attempts remain" do
+    provider = mock
+    provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "AccountsReady" })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+    SophtronItem::Importer.any_instance.expects(:import_transactions_after_refresh)
+                           .with(@sophtron_account)
+                           .returns({ success: true, transactions_count: 0 })
+    SophtronAccount::Processor.any_instance.expects(:process).never
+
+    assert_enqueued_with(job: SophtronRefreshPollJob) do
+      SophtronRefreshPollJob.perform_now(@sophtron_account, job_id: "refresh-job", attempts_remaining: 5)
+    end
+  end
+
+  test "proceeds with Processor and sync when fetch returns non-zero transactions" do
+    provider = mock
+    provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "AccountsReady" })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+    SophtronItem::Importer.any_instance.expects(:import_transactions_after_refresh)
+                           .with(@sophtron_account)
+                           .returns({ success: true, transactions_count: 3 })
+    SophtronAccount::Processor.any_instance.expects(:process).returns({ transactions_imported: 3 })
+
+    # Should NOT re-enqueue the poll job; SHOULD enqueue a SyncJob for the account
+    assert_enqueued_with(job: SyncJob) do
+      SophtronRefreshPollJob.perform_now(@sophtron_account, job_id: "refresh-job", attempts_remaining: 5)
+    end
+  end
+
+  test "does not re-enqueue when fetch returns 0 transactions and last attempt is exhausted" do
+    provider = mock
+    provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "AccountsReady" })
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+    SophtronItem::Importer.any_instance.expects(:import_transactions_after_refresh)
+                           .with(@sophtron_account)
+                           .returns({ success: true, transactions_count: 0 })
+    # Processor runs even on genuinely empty (attempts exhausted) — the account may simply have no txns
+    SophtronAccount::Processor.any_instance.expects(:process).returns({})
+
+    assert_no_enqueued_jobs(only: SophtronRefreshPollJob) do
+      SophtronRefreshPollJob.perform_now(@sophtron_account, job_id: "refresh-job", attempts_remaining: 1)
+    end
+  end
 end

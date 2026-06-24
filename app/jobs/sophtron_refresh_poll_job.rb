@@ -17,7 +17,7 @@ class SophtronRefreshPollJob < ApplicationJob
     elsif Provider::Sophtron.job_failed?(job)
       sophtron_item.update!(last_connection_error: "Sophtron refresh failed")
     elsif Provider::Sophtron.job_success?(job) || Provider::Sophtron.job_completed?(job)
-      import_transactions!(sophtron_account, provider, sync)
+      import_transactions!(sophtron_account, provider, sync, job_id: job_id, attempts_remaining: attempts_remaining)
     elsif attempts_remaining.to_i > 1
       self.class.set(wait: POLL_INTERVAL).perform_later(
         sophtron_account,
@@ -34,7 +34,7 @@ class SophtronRefreshPollJob < ApplicationJob
 
   private
 
-    def import_transactions!(sophtron_account, provider, sync)
+    def import_transactions!(sophtron_account, provider, sync, job_id:, attempts_remaining:)
       sophtron_item = sophtron_account.sophtron_item
       result = SophtronItem::Importer.new(sophtron_item, sophtron_provider: provider, sync: sync)
                                     .import_transactions_after_refresh(sophtron_account)
@@ -43,6 +43,20 @@ class SophtronRefreshPollJob < ApplicationJob
         attributes = { last_connection_error: result[:error] }
         attributes[:status] = :requires_update if result[:requires_update]
         sophtron_item.update!(attributes)
+        return
+      end
+
+      # Sophtron materializes transactions with a vendor lag after reporting "Completed" or
+      # "AccountsReady". If the fetch succeeded but returned 0 transactions and we have
+      # polling attempts left, re-enqueue to retry the fetch rather than persisting an
+      # empty snapshot that would wedge the account on all future syncs.
+      if result[:transactions_count].to_i.zero? && attempts_remaining.to_i > 1
+        self.class.set(wait: POLL_INTERVAL).perform_later(
+          sophtron_account,
+          job_id: job_id,
+          attempts_remaining: attempts_remaining.to_i - 1,
+          sync: sync
+        )
         return
       end
 

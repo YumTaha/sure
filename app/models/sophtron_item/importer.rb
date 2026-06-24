@@ -334,7 +334,12 @@ class SophtronItem::Importer
           end
         else
           Rails.logger.info "SophtronItem::Importer - No transactions to store for account #{sophtron_account.account_id}"
-          sophtron_account.upsert_sophtron_transactions_snapshot!([]) if sophtron_account.raw_transactions_payload.nil?
+          # Do NOT persist an empty snapshot here. Sophtron has a vendor lag between
+          # reporting job completion and materializing transactions. Storing [] would
+          # wedge the account (raw_transactions_payload.nil? would become false) so a
+          # later retry with real data could never mark this as an initial fetch again.
+          # Leave raw_transactions_payload as-is (nil stays nil) so a subsequent fetch
+          # can still store the real transactions and self-heal.
         end
 
         { success: true, transactions_count: transactions_count }
