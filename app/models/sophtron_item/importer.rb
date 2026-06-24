@@ -326,7 +326,14 @@ class SophtronItem::Importer
               sophtron_account.upsert_sophtron_transactions_snapshot!(existing_transactions + new_transactions)
             else
               Rails.logger.info "SophtronItem::Importer - No new transactions to store (all #{transactions.count} were duplicates) for account #{sophtron_account.account_id}"
-              sophtron_account.upsert_sophtron_transactions_snapshot!(existing_transactions) if sophtron_account.raw_transactions_payload.nil?
+              # Do NOT persist an empty snapshot here. If every fetched transaction was
+              # filtered out (e.g. all lacked a valid :id), existing_transactions is []
+              # and writing it would flip raw_transactions_payload from nil to non-nil —
+              # the same "wedged account" bug as the empty-API-response case below.
+              # Only write when there is actually something to persist.
+              if sophtron_account.raw_transactions_payload.nil? && existing_transactions.any?
+                sophtron_account.upsert_sophtron_transactions_snapshot!(existing_transactions)
+              end
             end
           rescue => e
             Rails.logger.error "SophtronItem::Importer - Failed to store transactions for account #{sophtron_account.account_id}: #{e.message}"
