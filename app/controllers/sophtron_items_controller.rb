@@ -94,17 +94,41 @@ class SophtronItemsController < ApplicationController
 
     item = item_for_institution_connection(@sophtron_item)
     item.ensure_customer!
-    response = sophtron_response_data!(
-      item.sophtron_provider.create_user_institution(
-        institution_id: params[:institution_id],
-        username: params[:bank_username],
-        password: params[:bank_password],
-        pin: ""
-      )
-    ).with_indifferent_access
 
-    job_id = response[:JobID] || response[:job_id]
-    user_institution_id = response[:UserInstitutionID] || response[:user_institution_id]
+    # Reuse path: the existing UserInstitution already has the correct credentials on Sophtron's
+    # side.  Calling RefreshUserInstitution returns the SAME UserInstitutionID and account_id
+    # (verified against the live API) plus a new JobID — true reuse, no orphaning.
+    # update_user_institution is intentionally NOT called here: it mints a NEW UserInstitution
+    # on Sophtron's backend, which would orphan the old one and all its transactions.
+    job_id, user_institution_id, raw_response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
+      refresh_response = sophtron_response_data!(
+        item.sophtron_provider.refresh_user_institution(item.user_institution_id)
+      ).with_indifferent_access
+
+      # Always keep the existing UID — never adopt whatever the response echoes back,
+      # since the whole point is that the UID must not change on reconnect.
+      [
+        refresh_response[:JobID] || refresh_response[:job_id],
+        item.user_institution_id,
+        refresh_response
+      ]
+    else
+      # New institution path: create a fresh UserInstitution.
+      create_response = sophtron_response_data!(
+        item.sophtron_provider.create_user_institution(
+          institution_id: params[:institution_id],
+          username: params[:bank_username],
+          password: params[:bank_password],
+          pin: ""
+        )
+      ).with_indifferent_access
+
+      [
+        create_response[:JobID] || create_response[:job_id],
+        create_response[:UserInstitutionID] || create_response[:user_institution_id],
+        create_response
+      ]
+    end
 
     if job_id.blank? || user_institution_id.blank?
       raise Provider::Sophtron::Error.new("Sophtron did not return JobID and UserInstitutionID", :invalid_response)
@@ -116,7 +140,7 @@ class SophtronItemsController < ApplicationController
       institution_name: params[:institution_name],
       user_institution_id: user_institution_id,
       current_job_id: job_id,
-      raw_job_payload: response,
+      raw_job_payload: raw_response,
       job_status: nil,
       last_connection_error: nil,
       status: :good
@@ -178,10 +202,13 @@ class SophtronItemsController < ApplicationController
       render_pending_connection_status
     elsif Provider::Sophtron.job_failed?(job)
       failure_message = sophtron_connection_failure_message(job)
+      # Always preserve the existing user_institution_id on failure so that a subsequent
+      # reconnect attempt goes through the reuse path (refresh_user_institution) rather
+      # than minting a brand-new UserInstitution on Sophtron's backend.
       @sophtron_item.update!(
         current_job_id: nil,
         current_job_sophtron_account_id: nil,
-        user_institution_id: (manual_sync_flow? ? @sophtron_item.user_institution_id : nil),
+        user_institution_id: @sophtron_item.user_institution_id,
         last_connection_error: failure_message,
         status: :requires_update
       )
@@ -427,6 +454,7 @@ class SophtronItemsController < ApplicationController
       Rails.logger.warn("Sophtron unlink during destroy failed: #{e.class} - #{e.message}")
     end
 
+    @sophtron_item.delete_remote!
     @sophtron_item.destroy_later
     redirect_to accounts_path, notice: t(".success")
   end
@@ -983,6 +1011,15 @@ class SophtronItemsController < ApplicationController
     end
 
     def item_for_institution_connection(item)
+      # When adding a new institution, first check whether the family already
+      # has a SophtronItem for the requested institution — if so, reuse it
+      # instead of creating a duplicate.
+      if connect_new_institution_flow? && params[:institution_id].present?
+        scope = Current.family.sophtron_items.active.where(institution_id: params[:institution_id])
+        existing = scope.where.not(user_institution_id: [ nil, "" ]).order(updated_at: :desc).first || scope.order(updated_at: :desc).first
+        return existing if existing.present?
+      end
+
       return item unless connect_new_institution_flow? && should_create_sophtron_item_for_new_institution?(item)
 
       Current.family.sophtron_items.create!(
