@@ -67,10 +67,13 @@ class SophtronItem < ApplicationRecord
   #
   # Skipped entirely when +user_institution_id+ is blank (item was never fully
   # connected to Sophtron).
-  def delete_remote!
+def delete_remote!
     return if user_institution_id.blank?
 
-    sophtron_provider.delete_user_institution(user_institution_id)
+    provider = sophtron_provider
+    raise Provider::Sophtron::Error.new("Sophtron provider is not configured", :configuration_error) unless provider
+
+    Provider::Sophtron.response_data!(provider.delete_user_institution(user_institution_id))
   rescue => e
     DebugLogEntry.capture(
       category: "provider_disconnect",
