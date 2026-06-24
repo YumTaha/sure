@@ -65,6 +65,8 @@ class SophtronRefreshPollJob < ApplicationJob
       account = sophtron_account.current_account
       return unless account
 
+      sophtron_item.update!(last_connection_error: nil, status: :good) if sophtron_item.requires_update? || sophtron_item.last_connection_error.present?
+
       account.sync_later(
         parent_sync: sync,
         window_start_date: sync&.window_start_date,
