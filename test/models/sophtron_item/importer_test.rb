@@ -138,7 +138,7 @@ class SophtronItem::ImporterTest < ActiveSupport::TestCase
     assert_nil sophtron_account.reload.raw_transactions_payload
   end
 
-  test "later sync refreshes account after an empty initial transaction fetch" do
+  test "later sync fetches transactions for account that had empty initial transaction fetch" do
     account = accounts(:depository)
     sophtron_account = @item.sophtron_accounts.create!(
       account_id: "acct-1",
@@ -170,8 +170,11 @@ class SophtronItem::ImporterTest < ActiveSupport::TestCase
     result = SophtronItem::Importer.new(@item, sophtron_provider: provider).import
 
     assert result[:success]
-    assert_equal [], sophtron_account.reload.raw_transactions_payload
+    # raw_transactions_payload stays nil so the account can self-heal on a later fetch
+    assert_nil sophtron_account.reload.raw_transactions_payload
 
+    # Second import: raw_transactions_payload is still nil so initial_transaction_fetch?
+    # remains true — no refresh is triggered, the fetch goes direct and picks up real data.
     provider = mock
     provider.expects(:get_accounts).with("ui-1").returns({
       accounts: [
@@ -185,8 +188,7 @@ class SophtronItem::ImporterTest < ActiveSupport::TestCase
       ],
       total: 1
     })
-    provider.expects(:refresh_account).with("acct-1").returns({ JobID: "refresh-job" })
-    provider.expects(:get_job_information).with("refresh-job").returns({ LastStatus: "Completed" })
+    provider.expects(:refresh_account).never
     provider.expects(:get_account_transactions).with("acct-1", start_date: anything).returns({
       transactions: [
         {
@@ -328,5 +330,69 @@ class SophtronItem::ImporterTest < ActiveSupport::TestCase
       assert_equal 0, result[:transactions_imported]
       assert_equal 0, result[:transactions_failed]
     end
+  end
+
+  # When the API returns transactions but ALL are filtered out (e.g. every entry has
+  # a blank/missing :id), new_transactions ends up empty. The else-branch must NOT
+  # persist existing_transactions (which is []) when raw_transactions_payload is nil —
+  # doing so would wedge the account the same way as writing [] from an empty API response.
+  test "all-filtered transactions do not persist empty snapshot when raw_transactions_payload is nil" do
+    account = accounts(:depository)
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-1",
+      name: "Checking",
+      currency: "USD",
+      balance: 100
+    )
+    AccountProvider.create!(account: account, provider: sophtron_account)
+
+    # Every transaction is missing :id — all will be filtered out by the dedup logic
+    provider = mock
+    provider.expects(:get_account_transactions).with("acct-1", start_date: anything).returns({
+      transactions: [
+        { accountId: "acct-1", amount: "-10.00", currency: "USD", date: "2026-06-01" }.with_indifferent_access,
+        { accountId: "acct-1", amount: "-20.00", currency: "USD", date: "2026-06-02" }.with_indifferent_access
+      ],
+      total: 2
+    })
+
+    # Use import_transactions_after_refresh (refresh: false) to bypass the refresh
+    # path and isolate the filtered-out-transactions / empty-snapshot logic.
+    result = SophtronItem::Importer.new(@item, sophtron_provider: provider)
+                                   .import_transactions_after_refresh(sophtron_account)
+
+    assert result[:success], "expected success: true even when all transactions are filtered"
+    assert_equal 2, result[:transactions_count], "transactions_count reflects what the API returned"
+    assert_nil sophtron_account.reload.raw_transactions_payload,
+               "raw_transactions_payload must stay nil — persisting [] would wedge the account"
+  end
+
+  # Sophtron vendor lag fix: empty transaction response must NOT persist [] snapshot.
+  # Storing [] would flip raw_transactions_payload from nil to non-nil, permanently
+  # wedging initial_transaction_fetch? to false and making the account unable to
+  # self-heal when real transactions are available on the next fetch.
+  test "fetch_and_store_transactions with empty response leaves raw_transactions_payload nil" do
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-1",
+      name: "Checking",
+      currency: "USD",
+      balance: 100
+    )
+
+    provider = mock
+    provider.expects(:get_account_transactions).with("acct-1", start_date: anything).returns({
+      transactions: [],
+      total: 0
+    })
+
+    # Use import_transactions_after_refresh (refresh: false) so we bypass the
+    # refresh path and go straight to the fetch, isolating the empty-snapshot logic.
+    result = SophtronItem::Importer.new(@item, sophtron_provider: provider)
+                                   .import_transactions_after_refresh(sophtron_account)
+
+    assert result[:success], "expected success: true for empty fetch"
+    assert_equal 0, result[:transactions_count]
+    assert_nil sophtron_account.reload.raw_transactions_payload,
+               "raw_transactions_payload must stay nil — [] would wedge the account"
   end
 end
