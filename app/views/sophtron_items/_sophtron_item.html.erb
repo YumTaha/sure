@@ -79,7 +79,8 @@
               icon: "refresh-cw",
               href: sync_sophtron_item_path(sophtron_item),
               frame: "modal",
-              title: t(".reconnect")
+              title: t(".reconnect"),
+              aria: { label: t(".reconnect") }
             ) %>
           <% elsif manual_sync_required || Rails.env.development? %>
             <%= render DS::Button.new(
@@ -87,7 +88,8 @@
               icon: "refresh-cw",
               href: sync_sophtron_item_path(sophtron_item),
               frame: (manual_sync_required ? "modal" : nil),
-              title: t(".sync_now")
+              title: t(".sync_now"),
+              aria: { label: t(".sync_now") }
             ) %>
           <% end %>
 
