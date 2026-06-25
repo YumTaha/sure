@@ -368,6 +368,22 @@ class Provider::Sophtron < Provider
     end
   end
 
+  # POST /api/UserInstitution/RetryAddingUserInstitution
+  # Resumes a stuck/failed add of an existing UserInstitution (re-auth) using the
+  # credentials already stored on Sophtron's side. Returns a fresh JobID for the SAME
+  # UserInstitutionID — no new UserInstitution is minted (de-dup invariant preserved).
+  def retry_adding_user_institution(user_institution_id)
+    with_provider_response do
+      request(
+        :post,
+        "/UserInstitution/RetryAddingUserInstitution",
+        body: {
+          UserInstitutionID: user_institution_id
+        }
+      )
+    end
+  end
+
   def poll_job(job_id, **)
     get_job_information(job_id)
   end

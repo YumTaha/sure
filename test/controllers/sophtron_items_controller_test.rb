@@ -1227,7 +1227,7 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
       institution_id: "my-bank",
       institution_name: "My Bank",
       user_institution_id: "ui-kept",
-      status: :requires_update
+      status: :good
     )
 
     provider = mock
@@ -1255,6 +1255,70 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
     # UID must be preserved — never adopt whatever the API echoes back
     assert_equal "ui-kept", @item.user_institution_id
     assert_equal "job-fh-refresh", @item.current_job_id
+  end
+
+  # Phase 2 re-auth: requires_update reconnect uses RetryAddingUserInstitution (not refresh)
+  test "connect_institution uses retry_adding_user_institution for requires_update item" do
+    @item.update!(
+      institution_id: "inst-1",
+      institution_name: "My Bank",
+      user_institution_id: "ui-1",
+      status: :requires_update
+    )
+
+    provider = mock
+    provider.expects(:retry_adding_user_institution).with("ui-1").returns({
+      JobID: "job-r",
+      UserInstitutionID: "ui-1"
+    })
+    provider.expects(:refresh_user_institution_full_history).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    post connect_institution_sophtron_item_url(@item), params: {
+      institution_id: "inst-1",
+      institution_name: "My Bank",
+      bank_username: "bank-user",
+      bank_password: "bank-pass"
+    }
+
+    @item.reload
+    assert_equal "job-r", @item.current_job_id
+    assert_equal "ui-1", @item.user_institution_id
+    assert_redirected_to connection_status_sophtron_item_path(@item)
+  end
+
+  # Phase 2 re-auth: good status reconnect uses refresh_user_institution_full_history (not retry)
+  test "connect_institution uses refresh_user_institution_full_history for good status item" do
+    @item.update!(
+      institution_id: "inst-1",
+      institution_name: "My Bank",
+      user_institution_id: "ui-1",
+      status: :good
+    )
+
+    provider = mock
+    provider.expects(:refresh_user_institution_full_history).with("ui-1").returns({
+      JobID: "job-f",
+      UserInstitutionID: "ui-1"
+    })
+    provider.expects(:retry_adding_user_institution).never
+
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    post connect_institution_sophtron_item_url(@item), params: {
+      institution_id: "inst-1",
+      institution_name: "My Bank",
+      bank_username: "bank-user",
+      bank_password: "bank-pass"
+    }
+
+    @item.reload
+    assert_equal "job-f", @item.current_job_id
+    assert_equal "ui-1", @item.user_institution_id
+    assert_redirected_to connection_status_sophtron_item_path(@item)
   end
 
   # (b) destroy calls delete_remote! with the item's user_institution_id

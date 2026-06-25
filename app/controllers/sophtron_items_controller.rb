@@ -109,16 +109,21 @@ class SophtronItemsController < ApplicationController
     # update_user_institution is intentionally NOT called here: it mints a NEW UserInstitution
     # on Sophtron's backend, which would orphan the old one and all its transactions.
     job_id, user_institution_id, raw_response = if item.user_institution_id.present? && item.institution_id.to_s == params[:institution_id].to_s
-      refresh_response = sophtron_response_data!(
-        item.sophtron_provider.refresh_user_institution_full_history(item.user_institution_id)
+      # A requires_update item is a stuck/failed connection — RetryAddingUserInstitution
+      # resumes the add on the SAME UserInstitution. A healthy item just refreshes.
+      # Both keep the existing UID (de-dup invariant); never adopt a response UID.
+      reuse_response = sophtron_response_data!(
+        if item.requires_update?
+          item.sophtron_provider.retry_adding_user_institution(item.user_institution_id)
+        else
+          item.sophtron_provider.refresh_user_institution_full_history(item.user_institution_id)
+        end
       ).with_indifferent_access
 
-      # Always keep the existing UID — never adopt whatever the response echoes back,
-      # since the whole point is that the UID must not change on reconnect.
       [
-        refresh_response[:JobID] || refresh_response[:job_id],
+        reuse_response[:JobID] || reuse_response[:job_id],
         item.user_institution_id,
-        refresh_response
+        reuse_response
       ]
     else
       # New institution path: create a fresh UserInstitution with full history retrieval.
