@@ -1042,6 +1042,37 @@ class SophtronItemsControllerTest < ActionDispatch::IntegrationTest
   end
 
 
+  test "sync on requires_update item routes to foreground manual-sync path and renders MFA challenge" do
+    @item.update!(user_institution_id: "ui-1", status: :requires_update, last_connection_error: "Sophtron refresh requires MFA")
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-req",
+      name: "Apple Card",
+      currency: "USD",
+      balance: 1_000
+    )
+    AccountProvider.create!(account: accounts(:depository), provider: sophtron_account)
+
+    provider = mock
+    provider.expects(:refresh_account).with("acct-req").returns({ JobID: "rjob-1" })
+    provider.expects(:get_job_information).with("rjob-1").returns({
+      TokenSentFlag: true,
+      TokenInputName: "Token",
+      LastStep: "TokenInput",
+      LastStatus: "Started",
+      SuccessFlag: nil
+    })
+    SophtronItem.any_instance.stubs(:ensure_customer!).returns("cust-1")
+    SophtronItem.any_instance.stubs(:sophtron_provider).returns(provider)
+
+    assert_no_enqueued_jobs only: SyncJob do
+      post sync_sophtron_item_url(@item)
+    end
+
+    assert_response :success
+    assert_includes response.body, "submit_mfa"
+    assert_equal "rjob-1", @item.reload.current_job_id
+  end
+
   test "link_existing_account links manual account to sophtron account" do
     @item.update!(user_institution_id: "ui-1")
     account = accounts(:depository)

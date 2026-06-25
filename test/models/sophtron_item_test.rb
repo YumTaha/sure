@@ -262,6 +262,38 @@ class SophtronItemTest < ActiveSupport::TestCase
     assert_equal [ configured, max_history ].max, result
   end
 
+  test "manual_sync_required? is true when status is requires_update" do
+    @item.update!(status: :requires_update)
+
+    assert @item.manual_sync_required?
+  end
+
+  test "manual_sync_sophtron_accounts returns linked accounts when status is requires_update" do
+    @item.update!(status: :requires_update)
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-req",
+      name: "Requires Update Checking",
+      currency: "USD",
+      balance: 500
+    )
+    AccountProvider.create!(account: accounts(:depository), provider: sophtron_account)
+
+    assert_equal [ sophtron_account ], @item.manual_sync_sophtron_accounts.to_a
+  end
+
+  test "manual_sync_sophtron_accounts returns none when status is good and no manual accounts" do
+    @item.update!(status: :good)
+    sophtron_account = @item.sophtron_accounts.create!(
+      account_id: "acct-good",
+      name: "Good Checking",
+      currency: "USD",
+      balance: 200
+    )
+    AccountProvider.create!(account: accounts(:depository), provider: sophtron_account)
+
+    assert_empty @item.manual_sync_sophtron_accounts
+  end
+
   test "delete_remote! records a DebugLogEntry and does not raise when provider call fails" do
     @item.update!(user_institution_id: "ui-bad")
     provider = mock
