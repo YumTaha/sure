@@ -298,6 +298,17 @@ class Provider::SophtronTest < ActiveSupport::TestCase
     assert_equal "ui-1", result[:UserInstitutionID]
   end
 
+  test "retries adding user institution with only UserInstitutionID in body" do
+    stub_request(:post, "https://api.sophtron.com/api/UserInstitution/RetryAddingUserInstitution")
+      .with(body: { UserInstitutionID: "ui-1" }.to_json)
+      .to_return(status: 200, body: { JobID: "job-retry", UserInstitutionID: "ui-1", MemberID: "mem-1" }.to_json)
+
+    result = provider_data(@provider.retry_adding_user_institution("ui-1"))
+
+    assert_equal "job-retry", result[:JobID]
+    assert_equal "ui-1", result[:UserInstitutionID]
+  end
+
   private
 
     def provider_data(response)

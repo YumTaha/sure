@@ -1,7 +1,7 @@
 # Sophtron Refresh MFA Recovery
 
 **Date:** 2026-06-24
-**Status:** SHIPPED (branch `fix/sophtron-refresh-mfa-recovery`)
+**Status:** SHIPPED (PR #10, merged to main)
 **Primary files:** `app/models/sophtron_item.rb`, `app/views/sophtron_items/_sophtron_item.html.erb`, `app/jobs/sophtron_refresh_poll_job.rb`, `config/locales/views/sophtron_items/en.yml`
 
 ---
