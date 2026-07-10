@@ -1,0 +1,12 @@
+<%# app/views/spending_digest_mailer/daily.text.erb %>
+<%= t("spending_digest_mailer.daily.heading") %>
+<%= @digest.yesterday_total.format %>
+<%= t("spending_digest_mailer.daily.mtd", amount: @digest.mtd_total.format) %>
+
+<% if @digest.categories.any? %>
+<% @digest.categories.each do |line| -%>
+- <%= line.name %>: <%= line.amount.format %>
+<% end -%>
+<% else -%>
+<%= t("spending_digest_mailer.daily.no_spending") %>
+<% end -%>

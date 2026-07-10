@@ -1,0 +1,7 @@
+en:
+  spending_digest_mailer:
+    daily:
+      subject: "Yesterday you spent %{amount}"
+      heading: "Yesterday's spending"
+      mtd: "This month so far: %{amount}"
+      no_spending: "No spending yesterday."
