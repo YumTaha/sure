@@ -10,6 +10,10 @@ class DailySpendingDigestJob < ApplicationJob
       begin
         digest = family.spending_digest(date: date)
         family.users.each do |user|
+          # deliver_now (not _later) on purpose: we are already inside an async
+          # worker, and the digest carries Money objects that ActiveJob cannot
+          # serialize across a deliver_later GlobalID boundary. Sending here
+          # keeps the real object in-process. Do not switch to deliver_later.
           SpendingDigestMailer.with(user: user, digest: digest).daily.deliver_now
         end
       rescue => e
