@@ -54,3 +54,9 @@ sweep_expired_goal_pledges:
   class: "SweepExpiredGoalPledgesJob"
   queue: "scheduled"
   description: "Marks goal pledges that passed their 7-day window as expired"
+
+daily_spending_digest:
+  cron: "0 7 * * * America/New_York" # 7:00 AM ET, DST-correct via Fugit
+  class: "DailySpendingDigestJob"
+  queue: "scheduled"
+  description: "Emails each family a daily spending digest (yesterday + MTD)"
