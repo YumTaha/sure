@@ -1,66 +1,59 @@
-# Daily Spending Digest — Design
+# Weekly Spending Digest — Design
 
-**Date:** 2026-07-10
+**Date:** 2026-07-10 (revised from an initial "daily" design)
 **Branch:** `feat/daily-spending-digest`
-**Status:** Design approved; pending implementation plan.
+**Status:** Design approved; reworking implementation to the weekly shape.
 
 ## Goal
-Email the user a daily summary of yesterday's spending (with month-to-date context), broken down by category, delivered at 7:00 AM ET. Self-hosted personal use.
+Email a **weekly** summary of the last 7 days of spending — posted (accurate), pending (recent, not-yet-settled), and an estimated total — with a per-category breakdown of posted spend. Monday 7 AM ET. Self-hosted personal use.
+
+## Why weekly + posted/pending (the reasoning that shaped this)
+- Card charges sit **pending 2–5 days** before posting. `IncomeStatement.expense_totals` uses `.excluding_pending`, so a "yesterday, posted-only" digest is ~always $0. Useless.
+- Including pending naively is **inaccurate**: pre-auth holds (e.g. a $175 Loves gas hold for a $40 fill) inflate pending until it settles.
+- Resolution: **weekly window** (most charges post within 7 days → posted is fairly complete) and show **three figures** so the human judges:
+  - **Posted (settled)** — accurate, with category breakdown.
+  - **Pending (not settled)** — recent activity the posted view misses; flagged as approximate (may include holds).
+  - **Estimated total** = posted + pending.
+- No `IncomeStatement` change needed: posted via `expense_totals`, pending via `IncomeStatement#totals(transactions_scope: family.transactions.visible.pending, date_range:)`.
 
 ## Decisions (locked with user)
-- **Window:** yesterday (previous full calendar day) as the headline, plus a month-to-date (MTD) total for context.
-- **Detail:** yesterday's total + per-category breakdown; MTD total line.
-- **Send time:** 7:00 AM ET, DST-correct.
-- **Format:** styled HTML (app `mailer` layout) with a plain-text multipart fallback.
-- **Zero-spend days:** still send (`"You spent $0 yesterday"`) — daily habit + pipeline heartbeat.
-- **Recipient:** every user in the family (single admin account in this deployment).
-- **Mode:** `self_hosted` only (inert in managed mode). On by default; no toggle (YAGNI).
-- **Currency:** family currency (USD), formatted server-side via `Money`.
+- **Cadence:** weekly, **Monday 7:00 AM ET** (DST-correct), recapping the prior 7 days.
+- **Window:** last 7 days ending on the reference date (inclusive).
+- **Figures:** posted total + category breakdown; pending total; estimated total (posted+pending).
+- **Pending caveat** shown in the email (may include holds; firms up as it posts).
+- **Aesthetic:** "Design 2 / Cards" mockup — green header, three stat tiles (Posted / Pending / Est. total), category rows with proportional bars, amber caveat callout. Responsive 600px table layout, inline styles, no external assets.
+- **Recipient:** every user in the family (single admin here). **Mode:** `self_hosted` only. **Currency:** family currency (USD), `Money#format`.
+- **Zero-spend:** still send.
 
-## Non-goals (YAGNI)
-- No per-account filtering, no user-configurable schedule/preferences UI, no weekly/monthly variants, no in-app digest view, no opt-in/out toggle (add later only if requested).
+## Non-goals (YAGNI / deferred)
+- **Budget-progress bars — DEFERRED** (see ROADMAP). When the user configures monthly budgets, the category bars will fill toward a **prorated weekly budget = monthly × 7 ÷ days_in_month** (green/amber/red), with a share-of-spending fallback for un-budgeted categories. Not built now (no budgets configured; nothing to point bars at). For now, category bars show **share of the week's posted spend**.
+- No per-account filtering, no preferences UI, no daily/monthly variants.
 
-## Architecture — reuse existing aggregation
-The app already computes spend via `IncomeStatement`. **No new spend query is written.** The digest is a thin packaging layer.
+## Architecture
+Reuse existing aggregation; the PORO packages numbers; a mailer renders Design 2; a weekly cron job fans out.
 
-### Components (each one concern)
-1. **`Family::SpendingDigest` (PORO)** — the only new domain logic. Constructed with `(family, date:)`; exposes a plain value object:
-   - `yesterday_total` (Money) — `income_statement.expense_totals(period: Period.custom(start_date: date, end_date: date)).total`
-   - `yesterday_categories` — array of `{ name, amount }` from that period's `.category_totals` (drop zero/negative, sort desc, exclude uncategorized-investment rows).
-   - `mtd_total` (Money) — `expense_totals` for `Period.custom(start_date: date.beginning_of_month, end_date: date)`.
-   - `currency`.
-   - `expense_totals` uses `classification: "expense"`, so investment trades (Robinhood) are excluded from "spending" — verify `include_trades` handling in the plan (want expenses only).
-   - Exposed via `Family#spending_digest(date:)` returning the PORO (fat-model convention).
-2. **`SpendingDigestMailer#daily(user:, digest:)`** — subclasses `ApplicationMailer` (inherits `EMAIL_SENDER` default from). Subject: `"Yesterday you spent {yesterday_total}"`. Multipart.
-3. **Views** — `app/views/spending_digest_mailer/daily.html.erb` (styled, `mailer` layout: total, MTD line, category rows) + `daily.text.erb` (plain fallback).
-4. **`DailySpendingDigestJob` (ActiveJob, `queue: :scheduled`)** — guard: return unless `Rails.application.config.app_mode.self_hosted?`. For each `Family`, build `family.spending_digest(date: Date.current.yesterday)`, then for each family user `SpendingDigestMailer.daily(user:, digest:).deliver_later`.
-5. **`config/schedule.yml`** entry:
-   ```yaml
-   daily_spending_digest:
-     cron: "0 7 * * * America/New_York"   # 7 AM ET, DST-correct via Fugit
-     class: "DailySpendingDigestJob"
-     queue: "scheduled"
-     description: "Emails each family a daily spending digest (yesterday + MTD)"
-   ```
-   Fallback if the TZ suffix is unsupported by the installed sidekiq-cron/Fugit: `"0 11 * * *"` (UTC ≈ 7 AM ET, drifts 1h across DST — matches the pattern the existing crons already accept).
+### Components
+1. **`Family::WeeklySpendingDigest` (PORO)** — `Family::WeeklySpendingDigest.new(family, end_date:)`, exposed via `Family#weekly_spending_digest(end_date:)`. Window = `Period.custom(start_date: end_date - 6, end_date: end_date)`.
+   - `posted_total` (Money) — `income_statement(user: nil).expense_totals(period:).total` wrapped in `Money`.
+   - `posted_categories` — `Array<CategoryLine(name, amount:Money, pct:Integer)>` from that period's `.category_totals`: reject subcategories, positive only, sorted desc; `pct` = round(amount / posted_total × 100) for the proportional bar (0 when total is 0).
+   - `pending_total` (Money) — `income_statement(user: nil).totals(transactions_scope: family.transactions.visible.pending, date_range: period.date_range).expense_money`.
+   - `estimated_total` (Money) — `Money.new(posted_total.amount + pending_total.amount, currency)`.
+   - `currency`, `range_label` (e.g. "Jul 3 – Jul 9, 2026").
+2. **`SpendingDigestMailer#weekly(user:, digest:)`** — subclasses `ApplicationMailer`; subject `"Last week you spent {estimated_total}"`; multipart. Passes the PORO object directly (sent via `deliver_now` inside the job — no serialization).
+3. **Views** — `weekly.html.erb` (Design 2 markup, inline styles, proportional bars) + `weekly.text.erb` (plain fallback).
+4. **`WeeklySpendingDigestJob`** (ActiveJob, `queue: :scheduled`) — guard `self_hosted?`; `end_date = Date.current.prev_day` (last completed day); per family → `family.weekly_spending_digest(end_date:)`; per `family.users` → `SpendingDigestMailer.with(user:, digest:).weekly.deliver_now` (in-process, avoids Money serialization); per-family rescue+log+continue.
+5. **`config/schedule.yml`** — `weekly_spending_digest`, cron `0 7 * * 1 America/New_York`.
 
 ### Data flow
-```
-cron (7 AM ET)
-  → DailySpendingDigestJob   (self_hosted guard)
-    → family.spending_digest(date: yesterday)      # wraps IncomeStatement.expense_totals ×2
-      → SpendingDigestMailer.daily(user:, digest:).deliver_later
-        → Gmail SMTP → inbox
-```
+`cron Mon 7 AM ET → WeeklySpendingDigestJob (self_hosted) → family.weekly_spending_digest(end_date: yesterday) → SpendingDigestMailer.with(...).weekly.deliver_now → Gmail SMTP → inbox`
 
 ## Error handling
-- Per-family failure isolated: rescue inside the family loop, log, continue (one family's error never blocks others). Single-family here, but keeps the job robust.
-- Mailer delivery via `deliver_later` (Sidekiq) — transient SMTP failures retry via Sidekiq's retry.
+Per-family rescue+log+continue. `deliver_now` inside the async worker; comment explains why (Money not serializable across `deliver_later`).
 
-## Testing (Minitest + fixtures; no system tests)
-1. **`Family::SpendingDigest`** — fixture transactions across ≥2 categories on the target date + earlier in the month → assert `yesterday_total`, `yesterday_categories` (breakdown + order), `mtd_total`. Edge: zero-spend day → totals are 0, empty categories.
-2. **`DailySpendingDigestJob`** — asserts a mailer is enqueued per family user with the right digest (mocha); asserts it no-ops when `app_mode` is managed.
-3. **`SpendingDigestMailer#daily`** — renders HTML + text, correct subject/recipient; `$0` case renders cleanly.
+## Testing (Minitest + fixtures, `travel_to`; no system tests)
+1. **`Family::WeeklySpendingDigest`** — posted transactions across the 7-day window + a pending transaction (via `extra` provider flag) + one outside the window → assert `posted_total`, `posted_categories` (breakdown, pct, order), `pending_total` (only the pending one), `estimated_total` = posted+pending. Zero-spend → zeros, empty categories. Deterministic via `travel_to`.
+2. **`SpendingDigestMailer#weekly`** — renders HTML+text, subject/recipient, body shows posted/pending/estimated + category names; zero case clean.
+3. **`WeeklySpendingDigestJob`** — `assert_emails <family-user-count>` around `perform_now` (forces real render); managed mode → `assert_no_emails`.
 
 ## Deploy
-Ships as `feat/daily-spending-digest` → PR → review → merge to fork `main` → prod deploy (worktree `checkout main` + `docker compose up -d --build`). The sidekiq-cron entry loads on worker boot; SMTP pipe already verified in production.
+`feat/daily-spending-digest` → PR → review → merge → prod deploy (worktree checkout main + `docker compose up -d --build`). Cron loads on worker boot; SMTP verified in prod.
