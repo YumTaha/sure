@@ -24,7 +24,7 @@ class Family::WeeklySpendingDigest
   end
 
   def pending_total
-    statement.totals(transactions_scope: @family.transactions.visible.pending, date_range: @period.date_range).expense_money
+    statement.totals(transactions_scope: @family.transactions.visible.pending.in_period(@period), date_range: @period.date_range).expense_money
   end
 
   def estimated_total

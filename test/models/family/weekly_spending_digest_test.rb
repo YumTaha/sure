@@ -24,6 +24,10 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       pending_entry = create_transaction(account: @account, date: Date.new(2026, 7, 11), amount: 50, category: categories(:food_and_drink), name: "GasHold")
       pending_entry.entryable.update!(extra: { "plaid" => { "pending" => true } })
 
+      # Pending, OUTSIDE window (must be excluded from pending_total)
+      outside_pending_entry = create_transaction(account: @account, date: Date.new(2026, 6, 20), amount: 500, category: categories(:food_and_drink), name: "OldHold")
+      outside_pending_entry.entryable.update!(extra: { "plaid" => { "pending" => true } })
+
       digest = @family.weekly_spending_digest(end_date: end_date)
 
       assert_equal "Jul 8 – Jul 14, 2026", digest.range_label
