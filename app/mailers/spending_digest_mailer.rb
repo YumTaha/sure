@@ -1,10 +1,10 @@
 class SpendingDigestMailer < ApplicationMailer
-  def daily
+  def weekly
     @user = params[:user]
     @digest = params[:digest]
     mail(
       to: @user.email,
-      subject: t("spending_digest_mailer.daily.subject", amount: @digest.yesterday_total.format)
+      subject: t("spending_digest_mailer.weekly.subject", amount: @digest.estimated_total.format)
     )
   end
 end

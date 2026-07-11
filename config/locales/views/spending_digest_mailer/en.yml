@@ -1,7 +1,11 @@
 en:
   spending_digest_mailer:
-    daily:
-      subject: "Yesterday you spent %{amount}"
-      heading: "Yesterday's spending"
-      mtd: "This month so far: %{amount}"
-      no_spending: "No spending yesterday."
+    weekly:
+      subject: "Last week you spent %{amount}"
+      heading: "Weekly spending"
+      posted: "Posted"
+      pending: "Pending"
+      estimated: "Est. total"
+      by_category: "Posted by category"
+      caveat: "Pending includes charges not yet settled — may contain temporary holds (e.g. gas pre-auth) and can change."
+      no_spending: "No spending in the last 7 days."
