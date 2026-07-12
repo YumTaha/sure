@@ -58,3 +58,24 @@ Per-family rescue+log+continue. `deliver_now` inside the async worker; comment e
 
 ## Deploy
 `feat/daily-spending-digest` → PR → review → merge → prod deploy (worktree checkout main + `docker compose up -d --build`). Cron loads on worker boot; SMTP verified in prod.
+
+---
+
+## Budget-progress bars (2026-07-12 increment — branch `feat/digest-budget-bars`)
+User configured monthly budgets, so the category bars now track budget instead of share-of-week (for budgeted categories).
+
+**Per category (posted spend for the week):**
+- Find the family Budget whose period covers the window's end date: `family.budgets.detect { |b| (b.start_date..b.end_date).cover?(end_date) }`.
+- Monthly limit for the category = that budget's `budget_categories` where `category_id` matches, value `bc[:budgeted_spending]` (BigDecimal; skip nil/zero → treat as un-budgeted).
+- **Prorated weekly target** = `monthly_limit * 7 / budget_period_days` where `budget_period_days = (b.end_date - b.start_date).to_i + 1` (handles custom month boundaries; e.g. $200/mo, 31-day July → ~$45.16/wk).
+- `budget_pct` = `(posted_category_amount / weekly_target * 100).round` (posted only — the bar stays accurate vs budget; pending stays in its own line).
+- **Status / color:** `<80% green (#059669)`, `80–100% amber (#D97706)`, `>100% red (#DC2626)`. Bar width = `min(budget_pct, 100)%` (red when over).
+- Show `spent of $weekly_target` label.
+
+**Un-budgeted spent categories** (no budget, or no budget for the month): keep the current behavior — neutral **gray (#9CA3AF)** bar = share of the week's posted spend (`pct` field), no target label. Listed after budgeted ones.
+
+**PORO change:** `CategoryLine` gains `weekly_budget` (Money or nil), `budget_pct` (Integer or nil), `status` (`:under`/`:near`/`:over`/`:none`). `pct` (share) retained for the un-budgeted fallback.
+
+**Testing:** category under/near/over its prorated weekly budget → correct status; un-budgeted category → `:none` + gray share bar; no-budget-month → all categories `:none`; proration math (limit×7÷period_days).
+
+**Deploy:** Option A — branch → PR → Copilot review → merge → then deploy merged main to prod. No prod mutation before merge.
