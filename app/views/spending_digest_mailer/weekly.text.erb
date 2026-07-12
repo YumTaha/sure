@@ -9,7 +9,11 @@
 <%= t("spending_digest_mailer.weekly.by_category") %>
 <% if @digest.posted_categories.any? %>
 <% @digest.posted_categories.each do |line| -%>
+<% if line.status != :none -%>
+- <%= line.name %>: <%= line.amount.format %> (<%= t("spending_digest_mailer.weekly.of_budget_pct", pct: line.budget_pct, budget: line.weekly_budget.format) %>)
+<% else -%>
 - <%= line.name %>: <%= line.amount.format %>
+<% end -%>
 <% end -%>
 <% else -%>
 <%= t("spending_digest_mailer.weekly.no_spending") %>
