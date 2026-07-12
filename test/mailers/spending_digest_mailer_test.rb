@@ -11,8 +11,8 @@ class SpendingDigestMailerTest < ActionMailer::TestCase
       currency: "USD",
       range_label: "Jul 8 – Jul 14, 2026",
       posted_categories: [
-        Family::WeeklySpendingDigest::CategoryLine.new(name: "Food & Drink", amount: Money.new(100, "USD"), pct: 50),
-        Family::WeeklySpendingDigest::CategoryLine.new(name: "Shopping", amount: Money.new(100, "USD"), pct: 50)
+        Family::WeeklySpendingDigest::CategoryLine.new(name: "Food & Drink", amount: Money.new(100, "USD"), pct: 50, weekly_budget: Money.new(200, "USD"), budget_pct: 50, status: :under),
+        Family::WeeklySpendingDigest::CategoryLine.new(name: "Shopping", amount: Money.new(100, "USD"), pct: 50, weekly_budget: nil, budget_pct: nil, status: :none)
       ]
     )
 

@@ -33,6 +33,8 @@
     <% if @digest.posted_categories.any? %>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
         <% @digest.posted_categories.each do |line| %>
+          <% bar_color = { under: "#059669", near: "#D97706", over: "#DC2626", none: "#9CA3AF" }.fetch(line.status) %>
+          <% bar_width = line.status == :none ? line.pct : [ line.budget_pct, 100 ].min %>
           <tr><td style="padding:12px 0 4px;">
               <table role="presentation" width="100%"><tr>
                 <td style="font:500 14px/1 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;"><%= line.name %></td>
@@ -40,9 +42,12 @@
               </tr></table>
               <div style="margin-top:6px;">
                 <div style="height:8px;background:#f1f5f9;border-radius:6px;overflow:hidden;">
-                  <div style="height:8px;width:<%= line.pct %>%;background:#059669;border-radius:6px;"></div>
+                  <div style="height:8px;width:<%= bar_width %>%;background:<%= bar_color %>;border-radius:6px;"></div>
                 </div>
               </div>
+              <% if line.status != :none %>
+                <div style="margin-top:4px;font:400 11px/1.3 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#64748b;"><%= t("spending_digest_mailer.weekly.of_weekly_budget", amount: line.amount.format, budget: line.weekly_budget.format) %></div>
+              <% end %>
             </td></tr>
         <% end %>
       </table>

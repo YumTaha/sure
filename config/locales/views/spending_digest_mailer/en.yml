@@ -9,3 +9,5 @@ en:
       by_category: "Posted by category"
       caveat: "Pending includes charges not yet settled — may contain temporary holds (e.g. gas pre-auth) and can change."
       no_spending: "No spending in the last 7 days."
+      of_weekly_budget: "%{amount} of %{budget}/wk"
+      of_budget_pct: "%{pct}% of %{budget}/wk"
