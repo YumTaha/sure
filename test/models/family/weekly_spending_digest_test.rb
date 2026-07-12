@@ -47,8 +47,8 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       assert_includes names, "Food & Drink"
       assert_includes names, categories(:one).name
 
-      # No budget covers July 2026 in this test (no Budget fixture/bootstrap here),
-      # so every category should be un-budgeted.
+# This test doesn't set any per-category budget limits for the window, so every
+# category should be treated as un-budgeted.
       categories.each do |line|
         assert_equal :none, line.status
         assert_nil line.weekly_budget
