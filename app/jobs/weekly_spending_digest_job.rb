@@ -22,14 +22,20 @@ class WeeklySpendingDigestJob < ApplicationJob
         # and the next hourly run retries rather than silently dropping the week.
         family.with_lock do
           next if already_sent?(family, target)
-          digest = family.weekly_spending_digest(end_date: end_date)
-          family.users.each do |user|
+          digest = nil
+          sent_any = false
+          family.users.find_each do |user|
+            digest ||= family.weekly_spending_digest(end_date: end_date)
+            sent_any = true
             # deliver_now (not _later): already inside an async worker, and the
             # digest carries Money objects ActiveJob can't serialize across a
             # deliver_later GlobalID boundary. Do not switch to deliver_later.
             SpendingDigestMailer.with(user: user, digest: digest).weekly.deliver_now
           end
-          family.update_column(:last_weekly_digest_sent_on, target.to_date)
+          # Only mark the week done if an email actually went out. A family with
+          # no users yet must not be marked, or it'd be permanently suppressed
+          # for the week even after a user is added (no catch-up).
+          family.update_column(:last_weekly_digest_sent_on, target.to_date) if sent_any
         end
       rescue => e
         Rails.logger.error("WeeklySpendingDigestJob failed for family #{family.id}: #{e.class} #{e.message}")

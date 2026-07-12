@@ -40,6 +40,18 @@ class WeeklySpendingDigestJobTest < ActiveJob::TestCase
     end
   end
 
+  test "does not mark a family that has no users (avoids permanently suppressing its digest)" do
+    Rails.application.config.stubs(:app_mode).returns(ActiveSupport::StringInquirer.new("self_hosted"))
+    userless = Family.create!(name: "Userless")
+    assert_empty userless.users
+
+    travel_to Time.utc(2026, 7, 13, 12, 0, 0) do
+      WeeklySpendingDigestJob.perform_now
+    end
+
+    assert_nil userless.reload.last_weekly_digest_sent_on
+  end
+
   test "does nothing in managed mode" do
     Rails.application.config.stubs(:app_mode).returns(ActiveSupport::StringInquirer.new("managed"))
 

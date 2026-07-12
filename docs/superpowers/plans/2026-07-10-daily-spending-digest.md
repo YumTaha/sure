@@ -1,4 +1,6 @@
-# Daily Spending Digest Implementation Plan
+# Daily Spending Digest Implementation Plan (historical)
+
+> **NOTE (outdated):** The shipped feature is the **weekly** spending digest (posted + pending + estimated total, self-healing hourly catch-up). This document is the original *daily* plan, kept for history. For the current design see [`../specs/2026-07-10-daily-spending-digest-design.md`](../specs/2026-07-10-daily-spending-digest-design.md).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
