@@ -56,7 +56,7 @@ sweep_expired_goal_pledges:
   description: "Marks goal pledges that passed their 7-day window as expired"
 
 weekly_spending_digest:
-  cron: "0 7 * * 1 America/New_York" # Mon 7:00 AM ET, DST-correct via Fugit
+  cron: "0 * * * *" # every hour; self-healing catch-up for the Mon 7 AM ET send (see job for details)
   class: "WeeklySpendingDigestJob"
   queue: "scheduled"
-  description: "Emails each family a weekly spending digest (posted + pending + estimated, last 7 days)"
+  description: "Runs hourly and self-heals: emails each family a weekly spending digest (posted + pending + estimated, last 7 days) the first time it runs at/after Mon 7:00 AM ET, so a machine that was off/asleep at that moment still catches up later that day"
