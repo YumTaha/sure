@@ -14,15 +14,23 @@ class WeeklySpendingDigestJob < ApplicationJob
 
     Family.find_each do |family|
       begin
-        next if already_sent?(family, target)
-        digest = family.weekly_spending_digest(end_date: end_date)
-        family.users.each do |user|
-          # deliver_now (not _later): already inside an async worker, and the
-          # digest carries Money objects ActiveJob can't serialize across a
-          # deliver_later GlobalID boundary. Do not switch to deliver_later.
-          SpendingDigestMailer.with(user: user, digest: digest).weekly.deliver_now
+        # with_lock serializes concurrent runs (e.g. the hourly cron overlapping
+        # a manual trigger, or a run exceeding the hour): it reloads the row
+        # FOR UPDATE, so a second runner waits, then re-reads the now-set marker
+        # and skips — preventing a duplicate send. Marker is written only after
+        # a successful send (send-then-mark), so a crash mid-send leaves it unset
+        # and the next hourly run retries rather than silently dropping the week.
+        family.with_lock do
+          next if already_sent?(family, target)
+          digest = family.weekly_spending_digest(end_date: end_date)
+          family.users.each do |user|
+            # deliver_now (not _later): already inside an async worker, and the
+            # digest carries Money objects ActiveJob can't serialize across a
+            # deliver_later GlobalID boundary. Do not switch to deliver_later.
+            SpendingDigestMailer.with(user: user, digest: digest).weekly.deliver_now
+          end
+          family.update_column(:last_weekly_digest_sent_on, target.to_date)
         end
-        family.update_column(:last_weekly_digest_sent_on, target.to_date)
       rescue => e
         Rails.logger.error("WeeklySpendingDigestJob failed for family #{family.id}: #{e.class} #{e.message}")
       end
