@@ -17,8 +17,9 @@ Email a **weekly** summary of the last 7 days of spending — posted (accurate),
 - No `IncomeStatement` change needed: posted via `expense_totals`, pending via `IncomeStatement#totals(transactions_scope: family.transactions.visible.pending, date_range:)`.
 
 ## Decisions (locked with user)
-- **Cadence:** weekly, **Monday 7:00 AM ET** (DST-correct), recapping the prior 7 days.
-- **Window:** last 7 days ending on the reference date (inclusive).
+- **Cadence:** weekly, targeting **Monday 7:00 AM ET** (DST-correct), recapping the completed prior week (Mon–Sun).
+- **Catch-up (self-heal):** the job runs **hourly** (cron `0 * * * *`), not once at 7 AM. Each run computes the most-recent-Monday-7 AM-ET target and sends **once per week** the first time it runs at/after that target — so if the machine was off/asleep at 7 AM Monday, the first hourly run after power-on sends it. A per-family `date` marker `families.last_weekly_digest_sent_on` (= the target Monday's date) prevents duplicate sends. Send-then-mark order: a crash mid-send leaves the marker unset so the next hourly run retries (a rare duplicate email is preferred over a silently-dropped week).
+- **Window (anchored):** `end_date = target Monday − 1` (the Sunday); window = `Period.custom(end_date−6 .. end_date)` = the completed Mon–Sun. Anchored to the target week so a late (caught-up) send still reports the correct week, not a "last 7 days from now" shifted window.
 - **Figures:** posted total + category breakdown; pending total; estimated total (posted+pending).
 - **Pending caveat** shown in the email (may include holds; firms up as it posts).
 - **Aesthetic:** "Design 2 / Cards" mockup — green header, three stat tiles (Posted / Pending / Est. total), category rows with proportional bars, amber caveat callout. Responsive 600px table layout, inline styles, no external assets.
