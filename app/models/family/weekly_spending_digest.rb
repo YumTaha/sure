@@ -89,10 +89,11 @@ class Family::WeeklySpendingDigest
 
     # The Budget whose monthly period covers the window's end date, or nil if
     # the family has no budget configured for that month.
-    def current_budget
-      return @current_budget if defined?(@current_budget)
-      @current_budget = @family.budgets.detect { |b| (b.start_date..b.end_date).cover?(@period.end_date) }
-    end
+def current_budget
+  return @current_budget if defined?(@current_budget)
+  date = @period.end_date
+  @current_budget = @family.budgets.where("start_date <= ? AND end_date >= ?", date, date).first
+end
 
     def budget_period_days
       @budget_period_days ||= (current_budget.end_date - current_budget.start_date).to_i + 1
