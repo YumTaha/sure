@@ -262,6 +262,10 @@ class Family < ApplicationRecord
     IncomeStatement.new(self, user: user)
   end
 
+  def weekly_spending_digest(end_date:)
+    Family::WeeklySpendingDigest.new(self, end_date: end_date)
+  end
+
   # Returns the Investment Contributions category for this family, creating it if it doesn't exist.
   # This is used for auto-categorizing transfers to investment accounts.
   # Always uses the family's locale to ensure consistent category naming across all users.

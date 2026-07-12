@@ -1,0 +1,18 @@
+<%# app/views/spending_digest_mailer/weekly.text.erb %>
+<%= t("spending_digest_mailer.weekly.heading") %>
+<%= @digest.range_label %>
+
+<%= t("spending_digest_mailer.weekly.posted") %>: <%= @digest.posted_total.format %>
+<%= t("spending_digest_mailer.weekly.pending") %>: <%= @digest.pending_total.format %>
+<%= t("spending_digest_mailer.weekly.estimated") %>: <%= @digest.estimated_total.format %>
+
+<%= t("spending_digest_mailer.weekly.by_category") %>
+<% if @digest.posted_categories.any? %>
+<% @digest.posted_categories.each do |line| -%>
+- <%= line.name %>: <%= line.amount.format %>
+<% end -%>
+<% else -%>
+<%= t("spending_digest_mailer.weekly.no_spending") %>
+<% end -%>
+
+<%= t("spending_digest_mailer.weekly.caveat") %>
