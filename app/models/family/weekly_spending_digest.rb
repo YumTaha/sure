@@ -101,14 +101,14 @@ class Family::WeeklySpendingDigest
     # category_id => monthly budgeted_spending (BigDecimal), skipping nil/zero limits.
     # Empty when there's no budget covering the window (all categories => :none).
     def monthly_limits
-      @monthly_limits ||= begin
-        return {} unless current_budget
-
+      @monthly_limits ||= if current_budget
         current_budget.budget_categories.each_with_object({}) do |bc, hash|
           limit = bc[:budgeted_spending]
           next if limit.blank? || limit.zero?
           hash[bc.category_id] = limit
         end
+      else
+        {}
       end
     end
 end
