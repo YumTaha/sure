@@ -8,8 +8,10 @@ class Family::WeeklySpendingDigest
   NEAR_THRESHOLD = 80
   OVER_THRESHOLD = 100
 
-  def initialize(family, end_date:)
+  def initialize(family, end_date:, user:)
+    raise ArgumentError, "user is required — the digest must be scoped to a recipient" if user.nil?
     @family = family
+    @user = user
     @end_date = end_date
     @period = Period.custom(start_date: end_date - 6, end_date: end_date)
   end
@@ -30,7 +32,9 @@ class Family::WeeklySpendingDigest
   end
 
   def pending_total
-    statement.totals(transactions_scope: @family.transactions.visible.pending.in_period(@period), date_range: @period.date_range).expense_money
+    scope = @family.transactions.visible.pending.in_period(@period)
+      .where(entries: { account_id: @user.finance_accounts.select(:id) })
+    statement.totals(transactions_scope: scope, date_range: @period.date_range).expense_money
   end
 
   def estimated_total
@@ -47,7 +51,7 @@ class Family::WeeklySpendingDigest
 
   private
     def statement
-      @statement ||= @family.income_statement(user: nil)
+      @statement ||= @family.income_statement(user: @user)
     end
 
     def posted_totals

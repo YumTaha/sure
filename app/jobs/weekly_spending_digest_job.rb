@@ -22,10 +22,12 @@ class WeeklySpendingDigestJob < ApplicationJob
         # and the next hourly run retries rather than silently dropping the week.
         family.with_lock do
           next if already_sent?(family, target)
-          digest = nil
           sent_any = false
           family.users.find_each do |user|
-            digest ||= family.weekly_spending_digest(end_date: end_date)
+            # One digest per recipient: totals/categories are scoped to the accounts
+            # that user can see (included_in_finances_for), so a member never receives
+            # another member's private-account spending.
+            digest = family.weekly_spending_digest(end_date: end_date, user: user)
             sent_any = true
             # deliver_now (not _later): already inside an async worker, and the
             # digest carries Money objects ActiveJob can't serialize across a

@@ -28,7 +28,7 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       outside_pending_entry = create_transaction(account: @account, date: Date.new(2026, 6, 20), amount: 500, category: categories(:food_and_drink), name: "OldHold")
       outside_pending_entry.entryable.update!(extra: { "plaid" => { "pending" => true } })
 
-      digest = @family.weekly_spending_digest(end_date: end_date)
+      digest = @family.weekly_spending_digest(end_date: end_date, user: users(:family_admin))
 
       assert_equal "Jul 8 – Jul 14, 2026", digest.range_label
       assert_equal "USD", digest.currency
@@ -70,7 +70,7 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
 
   test "zero-spend week yields zero totals and no categories" do
     travel_to Time.zone.local(2026, 7, 15, 12, 0, 0) do
-      digest = families(:empty).weekly_spending_digest(end_date: Date.new(2026, 7, 14))
+      digest = families(:empty).weekly_spending_digest(end_date: Date.new(2026, 7, 14), user: users(:empty))
       assert_equal 0, digest.posted_total.amount.to_i
       assert_equal 0, digest.pending_total.amount.to_i
       assert_equal 0, digest.estimated_total.amount.to_i
@@ -93,7 +93,7 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       # "Test" category is left un-budgeted (budgeted_spending defaults to 0 after sync_budget_categories)
       create_transaction(account: @account, date: Date.new(2026, 3, 12), amount: 50, category: categories(:one), name: "Misc")
 
-      digest = @family.weekly_spending_digest(end_date: end_date)
+      digest = @family.weekly_spending_digest(end_date: end_date, user: users(:family_admin))
       lines = digest.posted_categories
 
       expected_weekly_target = (BigDecimal("200") * 7 / 31)
@@ -128,7 +128,7 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       # "Test": weekly target = 100 * 7 / 30 ~= $23.33. $50 spend ~= 214% -> :over
       create_transaction(account: @account, date: Date.new(2026, 4, 9), amount: 50, category: categories(:one), name: "Gadget")
 
-      digest = @family.weekly_spending_digest(end_date: end_date)
+      digest = @family.weekly_spending_digest(end_date: end_date, user: users(:family_admin))
       lines = digest.posted_categories
 
       food_target = (BigDecimal("300") * 7 / 30)
@@ -152,7 +152,7 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
       create_transaction(account: @account, date: Date.new(2026, 6, 10), amount: 40, category: categories(:food_and_drink), name: "Lunch")
       create_transaction(account: @account, date: Date.new(2026, 6, 11), amount: 60, category: categories(:one), name: "Gear")
 
-      digest = @family.weekly_spending_digest(end_date: end_date)
+      digest = @family.weekly_spending_digest(end_date: end_date, user: users(:family_admin))
       lines = digest.posted_categories
 
       assert_operator lines.size, :>=, 2
@@ -161,6 +161,38 @@ class Family::WeeklySpendingDigestTest < ActiveSupport::TestCase
         assert_nil line.weekly_budget
         assert_nil line.budget_pct
       end
+    end
+  end
+
+  test "digest is scoped to accounts the recipient can see" do
+    travel_to Time.zone.local(2026, 7, 15, 12, 0, 0) do
+      end_date = Date.new(2026, 7, 14)
+
+      # `connected` is owned by family_admin and is NOT shared with family_member
+      # (only `depository` and `credit_card` are shared, per account_shares fixtures),
+      # so it is invisible in family_member's finances.
+      hidden_account = accounts(:connected)
+      assert_includes users(:family_admin).finance_accounts.pluck(:id), hidden_account.id
+      refute_includes users(:family_member).finance_accounts.pluck(:id), hidden_account.id
+
+      # Spending posted + pending on the account the member cannot see.
+      create_transaction(account: hidden_account, date: Date.new(2026, 7, 10), amount: 40, category: categories(:food_and_drink), name: "AdminOnlyPosted")
+      pending_entry = create_transaction(account: hidden_account, date: Date.new(2026, 7, 11), amount: 50, category: categories(:food_and_drink), name: "AdminOnlyHold")
+      pending_entry.entryable.update!(extra: { "plaid" => { "pending" => true } })
+
+      admin_digest  = @family.weekly_spending_digest(end_date: end_date, user: users(:family_admin))
+      member_digest = @family.weekly_spending_digest(end_date: end_date, user: users(:family_member))
+
+      # Owner sees the hidden-account spending; the member's total is lower by at
+      # least the hidden posted amount (both share the depository baseline, so the
+      # delta isolates exactly the account the member can't see).
+      assert_operator admin_digest.posted_total.amount, :>=, 40
+      assert_operator admin_digest.posted_total.amount - member_digest.posted_total.amount, :>=, 40
+
+      # Pending is likewise scoped: admin sees the $50 hold, member sees none of it
+      # (no baseline pending exists in the window).
+      assert_equal Money.new(50, "USD"), admin_digest.pending_total
+      assert_equal 0, member_digest.pending_total.amount.to_i
     end
   end
 end
