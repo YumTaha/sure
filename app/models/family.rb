@@ -291,8 +291,8 @@ class Family < ApplicationRecord
     IncomeStatement.new(self, user: user)
   end
 
-  def weekly_spending_digest(end_date:)
-    Family::WeeklySpendingDigest.new(self, end_date: end_date)
+  def weekly_spending_digest(end_date:, user:)
+    Family::WeeklySpendingDigest.new(self, end_date: end_date, user: user)
   end
 
   # Returns the Investment Contributions category for this family, creating it if it doesn't exist.
