@@ -8,7 +8,7 @@
         disabled: Current.family.syncing?,
         frame: :_top
       ) %>
-  <% if (family_sync = Current.family.syncs.visible.first) %>
+  <% if (family_sync = Current.family.syncs.visible.ordered.first) %>
     <%= button_to cancel_sync_path(family_sync),
                   method: :post,
                   class: "flex items-center gap-1 text-sm text-secondary hover:text-primary",

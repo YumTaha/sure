@@ -6,6 +6,7 @@ class SyncsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "member can cancel their family's sync" do
+    sign_in @user = users(:family_member)
     sync = Sync.create!(syncable: @user.family, status: :syncing)
 
     post cancel_sync_path(sync)
