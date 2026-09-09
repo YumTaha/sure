@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class WiseItemsController < ApplicationController
-  before_action :set_wise_item, only: [ :show, :edit, :update, :destroy, :sync, :setup_accounts, :complete_account_setup ]
+  before_action :set_wise_item, only: [ :show, :edit, :update, :destroy, :sync, :setup_accounts, :complete_account_setup, :generate_sca_keypair ]
   before_action :require_admin!, except: [ :index ]
 
   def index
@@ -36,11 +36,10 @@ class WiseItemsController < ApplicationController
     end
 
     session[:wise_pending_profiles] = profiles
-    @pending_profiles = profiles
-    @existing_profile_ids = Current.family.wise_items.pluck(:profile_id).map(&:to_s).to_set
-    @encrypted_pending_token = encrypt_pending_token(token)
+    session[:wise_pending_encrypted_token] = encrypt_pending_token(token)
+    session[:wise_pending_import_all_history] = params.dig(:wise_item, :import_all_history) == "1"
 
-    render :select_profiles
+    redirect_to select_profiles_wise_items_path
   rescue Provider::Wise::WiseError => e
     @wise_item = Current.family.wise_items.build
     error_key = e.error_type == :unauthorized ? ".invalid_token" : ".connection_failed"
@@ -51,9 +50,10 @@ class WiseItemsController < ApplicationController
   # Step 2: Show profile selection.
   def select_profiles
     @pending_profiles = session[:wise_pending_profiles]
+    @encrypted_pending_token = session[:wise_pending_encrypted_token]
 
-    if @pending_profiles.blank?
-      redirect_to new_wise_item_path, alert: t(".session_expired") and return
+    if @pending_profiles.blank? || @encrypted_pending_token.blank?
+      redirect_to settings_providers_path, alert: t(".session_expired") and return
     end
 
     @existing_profile_ids = Current.family.wise_items.pluck(:profile_id).map(&:to_s).to_set
@@ -61,17 +61,19 @@ class WiseItemsController < ApplicationController
 
   # Step 3: Create one WiseItem per selected profile.
   def link_profiles
-    token = decrypt_pending_token(params[:encrypted_pending_token]) # pipelock:ignore
+    token = decrypt_pending_token(session[:wise_pending_encrypted_token]) # pipelock:ignore
     profiles = session[:wise_pending_profiles]
 
     if token.blank? || profiles.blank?
-      redirect_to new_wise_item_path, alert: t(".session_expired") and return
+      redirect_to settings_providers_path, alert: t(".session_expired") and return
     end
 
     selected_ids = Array(params[:profile_ids]).map(&:to_s).compact_blank
     if selected_ids.empty?
       redirect_to select_profiles_wise_items_path, alert: t(".no_profiles_selected") and return
     end
+
+    import_all_history = session[:wise_pending_import_all_history] || false
 
     created = 0
     profiles.each do |profile|
@@ -86,12 +88,15 @@ class WiseItemsController < ApplicationController
         token: token,
         profile_id: profile_id,
         profile_type: profile_type,
-        item_name: display_name
+        item_name: display_name,
+        import_all_history: import_all_history
       )
       created += 1
     end
 
     session.delete(:wise_pending_profiles)
+    session.delete(:wise_pending_encrypted_token)
+    session.delete(:wise_pending_import_all_history)
 
     if created.zero?
       redirect_to settings_providers_path, alert: t(".already_connected")
@@ -129,6 +134,18 @@ class WiseItemsController < ApplicationController
 
   def setup_accounts
     @wise_accounts = @wise_item.wise_accounts.unlinked
+  end
+
+  # Generates a fresh SCA keypair for this item. The private key is stored
+  # (encrypted); the public key is derived from it on every render so the user
+  # can register it with Wise. Regenerating invalidates the previous keypair.
+  def generate_sca_keypair
+    @wise_item.generate_sca_keypair!
+    render_provider_panel_success(t(".success"))
+  rescue => e
+    Rails.logger.error "WiseItemsController#generate_sca_keypair - #{e.class}: #{e.message}"
+    @wise_item.errors.add(:base, t(".failed"))
+    render_provider_panel_error
   end
 
   def complete_account_setup
@@ -229,7 +246,7 @@ class WiseItemsController < ApplicationController
     end
 
     def wise_item_update_params
-      permitted = params.require(:wise_item).permit(:name, :sync_start_date, :token)
+      permitted = params.require(:wise_item).permit(:name, :sync_start_date, :import_all_history, :token)
       permitted.delete(:token) if @wise_item.persisted? && permitted[:token].blank?
       permitted[:token] = permitted[:token].to_s.strip if permitted[:token].present?
       permitted
