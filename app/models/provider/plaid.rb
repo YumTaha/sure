@@ -42,23 +42,23 @@ class Provider::Plaid
     raise JWT::VerificationError, "Invalid webhook body hash" unless ActiveSupport::SecurityUtils.secure_compare(expected_hash, actual_hash)
   end
 
-  def get_link_token(user_id:, webhooks_url:, redirect_url:, accountable_type: nil, access_token: nil)
+  def get_link_token(user_id:, webhooks_url:, redirect_url:, accountable_type: nil, access_token: nil, account_selection_enabled: false)
     request_params = {
       user: { client_user_id: user_id },
       client_name: "Sure Finances",
       country_codes: country_codes,
       language: "en",
       webhook: webhooks_url,
-      redirect_uri: redirect_url,
-      transactions: { days_requested: MAX_HISTORY_DAYS }
+      redirect_uri: redirect_url
     }
 
     if access_token.present?
       request_params[:access_token] = access_token
+      request_params[:update] = { account_selection_enabled: true } if account_selection_enabled
     else
-      billed = get_initial_products(accountable_type)
-      request_params[:products] = billed
-      request_params[:additional_consented_products] = eu? ? [] : (SUPPORTED_PLAID_PRODUCTS - billed)
+      request_params[:transactions] = { days_requested: MAX_HISTORY_DAYS }
+      request_params[:products] = get_initial_products(accountable_type)
+      request_params[:additional_consented_products] = get_additional_consented_products(accountable_type)
     end
 
     request = Plaid::LinkTokenCreateRequest.new(request_params)
@@ -115,6 +115,11 @@ class Provider::Plaid
     end
 
     TransactionSyncResponse.new(added:, modified:, removed:, cursor:)
+  end
+
+  def refresh_transactions(access_token)
+    request = Plaid::TransactionsRefreshRequest.new(access_token: access_token)
+    client.transactions_refresh(request)
   end
 
   def get_item_investments(access_token, start_date: nil, end_date: Date.current)
@@ -180,6 +185,10 @@ class Provider::Plaid
       [ transactions, securities ]
     end
 
+    # The Plaid products billed at link time for a given Sure account type.
+    # Investments map to the `investments` product, liability accounts
+    # (CreditCard/Loan) to `liabilities` plus `transactions`, everything else to
+    # `transactions`.
     def get_initial_products(accountable_type)
       return [ "transactions" ] if eu?
 
@@ -193,6 +202,23 @@ class Provider::Plaid
       else
         [ "transactions" ]
       end
+    end
+
+    # Everything else we can consent to at link time, so a product can be
+    # initialized later via API without forcing a re-link.
+    #
+    # Exception: we only request `liabilities` when the account being linked is
+    # itself a liability (CreditCard/Loan). Plaid's Link filters out any
+    # institution that does not support every requested product, so asking for
+    # `liabilities` on e.g. an Investment link silently hides investment-only
+    # brokerages like E*TRADE that don't offer it.
+    def get_additional_consented_products(accountable_type)
+      return [] if eu?
+
+      billed = get_initial_products(accountable_type)
+      consented = SUPPORTED_PLAID_PRODUCTS - billed
+      consented -= [ "liabilities" ] unless billed.include?("liabilities")
+      consented
     end
 
     def eu?

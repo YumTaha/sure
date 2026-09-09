@@ -1,0 +1,16 @@
+# Verified false positives from gitleaks' generic-api-key rule.
+# Each entry was inspected before being allowlisted; none is a real credential.
+# Never add a fingerprint here without confirming the value is fake or public.
+
+# Test fixture placeholder for a Redbark connection ("..._test_api_key_123").
+test/fixtures/redbark_items.yml:generic-api-key:5
+
+# German UI string: "Trading-212-Secret-Key einfügen" (form placeholder text).
+config/locales/views/settings/de.yml:generic-api-key:490
+
+# Public Solana account address (base58), alongside the public USDC mint
+# constant in the same file. Public chain addresses, not private keys.
+test/models/onchain/solana_adapter_test.rb:generic-api-key:7
+
+# Ruby expression `1.second.ago.iso8601` in a test payload, not a token.
+test/models/trade_republic_client_test.rb:generic-api-key:148

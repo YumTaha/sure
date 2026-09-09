@@ -3,7 +3,7 @@
 
   <h1 class="sr-only"><%= @chat.title %></h1>
 
-  <div data-controller="chat hotkey" class="flex flex-col h-full">
+  <div data-controller="chat hotkey" data-chat-response-timeout-value="<%= Chat.response_timeout_ms %>" class="flex flex-col h-full">
     <div class="md:p-4">
       <%= render "chats/chat_nav", chat: @chat %>
 
