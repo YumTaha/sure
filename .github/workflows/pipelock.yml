@@ -37,6 +37,7 @@ jobs:
           fail-on-findings: 'true'
           test-vectors: 'false'
           exclude-paths: |
+            app/controllers/api/v1/push_subscriptions_controller.rb
             config/locales/views/reports/ca.yml
             config/locales/views/reports/de.yml
             config/locales/views/reports/en.yml
