@@ -1,4 +1,5 @@
 class CategoriesController < ApplicationController
+  before_action :require_non_guest!, except: %i[index]
   before_action :set_category, only: %i[edit update destroy]
   before_action :set_categories, only: %i[update edit]
   before_action :set_transaction, only: :create
@@ -20,7 +21,7 @@ class CategoriesController < ApplicationController
   end
 
   def merge
-    @categories = Current.family.categories.alphabetically
+    @categories = Current.family.categories.alphabetically_by_hierarchy
 
     render layout: turbo_frame_request? ? false : "settings"
   end

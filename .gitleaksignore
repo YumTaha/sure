@@ -14,3 +14,15 @@ test/models/onchain/solana_adapter_test.rb:generic-api-key:7
 
 # Ruby expression `1.second.ago.iso8601` in a test payload, not a token.
 test/models/trade_republic_client_test.rb:generic-api-key:148
+
+# --- Added 2026-10-09 (upstream sync #5) ---
+# PostHog PUBLIC write-only project token, committed by upstream in its own
+# initializer and documented there as safe to distribute ("not an admin key").
+# Not our credential and not a secret; see posthog.rb's own comment.
+config/initializers/posthog.rb:generic-api-key:13
+
+# Test fixture placeholder ("test_coinspot_key_123").
+test/fixtures/coinspot_items.yml:generic-api-key:4
+
+# Ruby expression `2.days.ago.iso8601` in a test payload, not a token.
+test/models/trade_republic_client_test.rb:generic-api-key:906
