@@ -169,7 +169,12 @@ jobs:
 
   test_system:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from upstream's 15. The system suite has grown past that ceiling as
+    # upstream added providers and features: recent runs went 8m32s -> 12m36s ->
+    # 13m43s -> 13m53s, then hit the cap and was cancelled mid-run on
+    # 2026-10-26. This is suite growth, not a slow test -- revisit if it climbs
+    # toward 25 again rather than simply raising it a third time.
+    timeout-minutes: 30
 
     env:
       PLAID_CLIENT_ID: foo

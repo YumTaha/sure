@@ -24,7 +24,20 @@ class PrivacyGuardTest < ActiveSupport::TestCase
     "sentry-rails"  => { initializer: "sentry.rb",   env: %w[SENTRY_DSN] },
     "sentry-sidekiq" => { initializer: "sentry.rb",  env: %w[SENTRY_DSN] },
     "skylight"      => { initializer: nil,           env: %w[SKYLIGHT_AUTHENTICATION] },
-    "langfuse-ruby" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] }
+    # Upstream replaced langfuse-ruby with OpenTelemetry as the transport for
+    # the SAME Langfuse integration (2026-10-26). These seven gems are pulled in
+    # by lib/langfuse_tracing.rb and are constructed ONLY inside the
+    # LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY guard in langfuse.rb -- there is
+    # no global OpenTelemetry::SDK.configure and no auto-instrumentation, which
+    # the test below enforces. Reviewed and allowlisted deliberately.
+    "langfuse-ruby"                      => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-api"                  => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-common"               => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-exporter-otlp"        => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-exporter-otlp-common" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-registry"             => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-sdk"                  => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    "opentelemetry-semantic_conventions" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] }
   }.freeze
 
   # Substrings that identify an analytics/telemetry SDK in Gemfile.lock.
@@ -55,10 +68,19 @@ class PrivacyGuardTest < ActiveSupport::TestCase
       assert path.exist?, "#{config[:initializer]} vanished -- re-verify how #{gem} is now configured and gated."
 
       source = path.read
+
+      # Deliberately a mention check, not a structural one: these initializers
+      # gate in different shapes (sentry/langfuse branch on ENV directly;
+      # posthog assigns ENV to a config object and branches on that), so a
+      # same-line regex produces false failures. The risk this actually catches
+      # is upstream RENAMING or REMOVING the variable our deploy config sets --
+      # which would silently turn our opt-out into a no-op. Structural gating is
+      # covered by the unconditional-construction test and the Langfuse test.
       assert config[:env].any? { |var| source.include?(var) },
-        "#{config[:initializer]} no longer references any of #{config[:env].inspect}. The gate our " \
-        "production config relies on may have been renamed or removed, which would silently " \
-        "re-enable #{gem}. Re-check the initializer and update the deploy env accordingly."
+        "#{config[:initializer]} no longer references any of #{config[:env].inspect}. Our " \
+        "production relies on those being unset/false to keep #{gem} inert; if upstream " \
+        "renamed or removed the gate, this may now transmit. Re-check the initializer and " \
+        "update .env AND the compose x-rails-env anchor before shipping."
     end
   end
 
@@ -86,5 +108,54 @@ class PrivacyGuardTest < ActiveSupport::TestCase
         "#{File.basename(file)} references a telemetry SDK but contains no conditional or ENV " \
         "lookup -- it may initialize a client unconditionally. Verify it cannot transmit anything.")
     end
+  end
+
+  # OpenTelemetry is only safe here because it is never configured globally.
+  # A global `OpenTelemetry::SDK.configure`, an auto-instrumentation gem, or a
+  # tracer_provider assignment would read OTEL_EXPORTER_OTLP_ENDPOINT and could
+  # start exporting spans with no Langfuse key set at all -- bypassing the gate
+  # every other check in this file relies on.
+  test "OpenTelemetry is never configured globally" do
+    offenders = Dir[Rails.root.join("{app,lib,config}/**/*.rb")].select do |file|
+      File.read(file).match?(/OpenTelemetry::SDK\.configure|OpenTelemetry\.tracer_provider\s*=|use_all\b/)
+    end
+
+    assert_empty offenders.map { |f| f.sub("#{Rails.root}/", "") },
+      "OpenTelemetry is configured globally. It must only be instantiated inside the " \
+      "LANGFUSE_* guard in config/initializers/langfuse.rb. A global setup reads " \
+      "OTEL_EXPORTER_OTLP_ENDPOINT and can transmit without any Langfuse key being set."
+  end
+
+  test "no OpenTelemetry auto-instrumentation gem is present" do
+    locked = File.read(Rails.root.join("Gemfile.lock")).scan(/^    (opentelemetry-instrumentation[a-z0-9_-]*) \(/).flatten
+    assert_empty locked,
+      "An OpenTelemetry auto-instrumentation gem appeared. Those hook HTTP/DB calls " \
+      "and export automatically -- confirm what it transmits before allowlisting."
+  end
+
+  # Langfuse now pulls in the OpenTelemetry exporter, so its gate matters more
+  # than before: the tracer must be CONSTRUCTED inside the key check, not merely
+  # mention the keys. Deleting the `if` while leaving ENV.fetch in the
+  # constructor passed the mention check above, so this asserts the structure.
+  test "the Langfuse tracer is constructed only inside its key gate" do
+    source = Rails.root.join("config/initializers/langfuse.rb").read
+    gate = source[/^if .*LANGFUSE_PUBLIC_KEY.*LANGFUSE_SECRET_KEY.*$/]
+
+    assert gate,
+      "config/initializers/langfuse.rb no longer opens with an `if` on both LANGFUSE_PUBLIC_KEY " \
+      "and LANGFUSE_SECRET_KEY. Without that gate the OpenTelemetry exporter can be built and " \
+      "start a background export thread with no key configured."
+
+    # Upstream has changed this constructor before (Langfuse.configure ->
+    # LangfuseTracing.new when it moved onto OpenTelemetry), so accept either
+    # and fail loudly if it becomes something new we have not reviewed.
+    ctor = [ "LangfuseTracing.new", "Langfuse.configure" ].find { |c| source.include?(c) }
+    assert ctor,
+      "langfuse.rb no longer uses a known constructor (LangfuseTracing.new / Langfuse.configure). " \
+      "Upstream changed how tracing is set up -- re-read the file and confirm it still cannot " \
+      "transmit without LANGFUSE_* set, then update this guard."
+
+    assert_operator source.index(ctor), :>, source.index(gate),
+      "#{ctor} runs before/outside the LANGFUSE_* gate in langfuse.rb."
   end
 end
