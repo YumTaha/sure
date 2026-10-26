@@ -170,13 +170,35 @@ jobs:
       - name: Unit and integration tests
         run: bin/rails test
 
+      # Encryption tests skip unless Active Record encryption is configured
+      # through ENV or credentials (Encryptable.encryption_ready?), so the run
+      # above never exercises them. Rerun every test file that checks
+      # encryption_ready? with throwaway keys, so new encryption tests are
+      # picked up without a hand-kept list. The whole suite is not run with
+      # keys because unrelated tests assume encryption is off.
+      - name: Encryption tests
+        if: ${{ !cancelled() }}
+        env:
+          ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: test
+          ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: test
+          ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: test
+        run: |
+          mapfile -t files < <(grep -rl --include='*_test.rb' 'encryption_ready?' test | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No encryption tests found" >&2
+            exit 1
+          fi
+          printf '%s\n' "${files[@]}"
+          bin/rails test "${files[@]}"
+
   test_system:
     runs-on: ubuntu-latest
-    # Raised from upstream's 15. The system suite has grown past that ceiling as
-    # upstream added providers and features: recent runs went 8m32s -> 12m36s ->
-    # 13m43s -> 13m53s, then hit the cap and was cancelled mid-run on
-    # 2026-10-26. This is suite growth, not a slow test -- revisit if it climbs
-    # toward 25 again rather than simply raising it a third time.
+    # Raised from upstream's 15 (upstream has since raised it to 20 on its own).
+    # The system suite has grown past that ceiling as upstream added providers
+    # and features: recent runs went 8m32s -> 12m36s -> 13m43s -> 13m53s, then
+    # hit the cap and was cancelled mid-run on 2026-10-26. This is suite growth,
+    # not a slow test -- revisit if it climbs toward 25 again rather than simply
+    # raising it a third time.
     timeout-minutes: 30
 
     env:
