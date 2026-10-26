@@ -37,12 +37,21 @@ class PrivacyGuardTest < ActiveSupport::TestCase
     "opentelemetry-exporter-otlp-common" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
     "opentelemetry-registry"             => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
     "opentelemetry-sdk"                  => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
-    "opentelemetry-semantic_conventions" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] }
+    "opentelemetry-semantic_conventions" => { initializer: "langfuse.rb", env: %w[LANGFUSE_PUBLIC_KEY LANGFUSE_SECRET_KEY] },
+    # Logtail (Better Stack) log shipping, added upstream 2026-10-26. Gated in
+    # config/environments/production.rb, NOT in an initializer -- the initializer
+    # only disables Logtail's HTTP events, which would otherwise serialize raw
+    # headers and cookies past Rails' parameter filters. Both keys are unset here
+    # and deliberately not threaded into the compose x-rails-env anchor.
+    "logtail"       => { initializer: nil, env: %w[LOGTAIL_API_KEY LOGTAIL_INGESTING_HOST] },
+    "logtail-rack"  => { initializer: nil, env: %w[LOGTAIL_API_KEY LOGTAIL_INGESTING_HOST] },
+    "logtail-rails" => { initializer: nil, env: %w[LOGTAIL_API_KEY LOGTAIL_INGESTING_HOST] }
   }.freeze
 
   # Substrings that identify an analytics/telemetry SDK in Gemfile.lock.
   TELEMETRY_GEM_PATTERNS = %w[
     posthog sentry skylight newrelic ddtrace datadog honeybadger bugsnag
+    logtail betterstack logdna papertrail loggly sumologic
     rollbar scout_apm appsignal mixpanel segment amplitude analytics-ruby
     langfuse opentelemetry elastic-apm instana airbrake
   ].freeze
@@ -98,15 +107,20 @@ class PrivacyGuardTest < ActiveSupport::TestCase
   end
 
   test "no telemetry client is constructed unconditionally" do
+    # Looks for CONSTRUCTION, not mention. An earlier version flagged any file
+    # that named an SDK without a conditional, which wrongly failed
+    # logtail.rb -- a file whose entire content is an unconditional
+    # `HTTPEvents.enabled = false`, i.e. the safest thing it could possibly do.
+    construction = /\b(?:[A-Z]\w*::)*[A-Z]\w*\.(?:new|configure|init|start)\b/
+
     Dir[Rails.root.join("config/initializers/*.rb")].each do |file|
-      # Strip comments first: a commented-out example (e.g. the posthog.com host
-      # in the default content_security_policy.rb) is not executable code.
       source = File.read(file).lines.reject { |line| line.strip.start_with?("#") }.join
       next unless TELEMETRY_GEM_PATTERNS.any? { |p| source.downcase.include?(p) }
+      next unless source.match?(construction)
 
       assert_match(/\bif\b|\bunless\b|\.present\?|ENV\[|ENV\.fetch/, source,
-        "#{File.basename(file)} references a telemetry SDK but contains no conditional or ENV " \
-        "lookup -- it may initialize a client unconditionally. Verify it cannot transmit anything.")
+        "#{File.basename(file)} constructs a telemetry client with no conditional or ENV " \
+        "lookup guarding it. Verify it cannot transmit anything before shipping.")
     end
   end
 
@@ -158,4 +172,42 @@ class PrivacyGuardTest < ActiveSupport::TestCase
     assert_operator source.index(ctor), :>, source.index(gate),
       "#{ctor} runs before/outside the LANGFUSE_* gate in langfuse.rb."
   end
+
+  # Logs from a personal-finance app are sensitive, so the remote logger must
+  # stay behind its keys. The gate lives in production.rb, not an initializer.
+  test "Logtail ships logs only when both of its keys are set" do
+    # Conditional on Logtail actually being installed: the gems arrive with an
+    # upstream sync, and "not present" is trivially safe. The moment they ARE
+    # present, the gate becomes mandatory.
+    skip "logtail not installed" unless logtail_installed?
+
+    source = Rails.root.join("config/environments/production.rb").read
+
+    assert_match(/ENV\["LOGTAIL_API_KEY"\]\.present\?\s*&&\s*ENV\["LOGTAIL_INGESTING_HOST"\]\.present\?/, source,
+      "production.rb no longer requires BOTH LOGTAIL_API_KEY and LOGTAIL_INGESTING_HOST " \
+      "before building the remote logger. If upstream loosened or renamed that gate, this " \
+      "instance could start shipping application logs off-box.")
+  end
+
+  # Logtail's Rack HTTP events serialize raw headers (credentials, cookies) and
+  # query strings, bypassing Rails' parameter filtering entirely.
+  test "Logtail HTTP events stay disabled" do
+    skip "logtail not installed" unless logtail_installed?
+
+    path = Rails.root.join("config/initializers/logtail.rb")
+    assert path.exist?,
+      "logtail gems are installed but config/initializers/logtail.rb is gone -- that file is " \
+      "what disables Rack HTTP events. Without it, raw headers and cookies can reach the logs."
+    source = path.read
+
+    assert_match(/Logtail::Integrations::Rack::HTTPEvents\.enabled\s*=\s*false/, source,
+      "logtail.rb no longer disables Rack HTTP events. Those serialize raw headers and " \
+      "query strings past Rails' filters, so re-enabling them would put credentials and " \
+      "cookies into whatever log destination is configured.")
+  end
+
+  private
+    def logtail_installed?
+      File.read(Rails.root.join("Gemfile.lock")).match?(/^    logtail(-rails|-rack)? \(/)
+    end
 end
