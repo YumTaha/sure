@@ -106,7 +106,10 @@ jobs:
 
   test_unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Raised from upstream's 10 for the same reason as test_system: the suite
+    # keeps growing as upstream adds providers and features. Runs went
+    # 7m25s -> 9m47s -> 9m53s and then hit the cap on 2026-10-26.
+    timeout-minutes: 25
 
     env:
       PLAID_CLIENT_ID: foo
