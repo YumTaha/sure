@@ -26,3 +26,8 @@ test/fixtures/coinspot_items.yml:generic-api-key:4
 
 # Ruby expression `2.days.ago.iso8601` in a test payload, not a token.
 test/models/trade_republic_client_test.rb:generic-api-key:906
+
+# --- Added 2026-11-01 (auto-sync) ---
+# Test placeholder tokens ("old-access" / "old-refresh") in an upstream
+# TrueLayer model test, not a credential.
+test/models/truelayer_item_test.rb:generic-api-key:7

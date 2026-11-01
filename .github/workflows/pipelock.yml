@@ -39,6 +39,7 @@ jobs:
           exclude-paths: |
             app/controllers/api/v1/push_subscriptions_controller.rb
             test/initializers/logtail_test.rb
+            app/views/reports/google_sheets_instructions.html.erb
             config/locales/views/reports/ca.yml
             config/locales/views/reports/de.yml
             config/locales/views/reports/en.yml
