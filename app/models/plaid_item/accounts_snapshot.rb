@@ -7,8 +7,24 @@ class PlaidItem::AccountsSnapshot
     @plaid_provider = plaid_provider
   end
 
+  # Plaid reports no balance at all for some payment-only accounts, such as
+  # limited purpose or bill pay accounts that the user can't deselect in Link.
+  # PlaidAccount requires a balance and there is nothing to show for them, so
+  # new ones are left out instead of failing the whole item import. Accounts
+  # already imported stay in: a missing balance there still fails the sync
+  # rather than leaving the stored balance and transactions silently stale.
   def accounts
-    @accounts ||= plaid_provider.get_item_accounts(plaid_item.access_token).accounts
+    @accounts ||= begin
+      imported = plaid_item.plaid_accounts.pluck(:plaid_id)
+
+      plaid_provider.get_item_accounts(plaid_item.access_token).accounts.select do |account|
+        next true if imported.include?(account.account_id)
+        next true if account.balances&.current.present? || account.balances&.available.present?
+
+        log_account_without_balance(account)
+        false
+      end
+    end
   end
 
   def get_account_data(account_id)
@@ -48,7 +64,10 @@ class PlaidItem::AccountsSnapshot
 
       transactions = investments_data.transactions.select { |t| t.account_id == account_id }
       holdings = investments_data.holdings.select { |h| h.account_id == account_id }
-      securities = transactions.count > 0 && holdings.count > 0 ? investments_data.securities : []
+      # Holdings and investment transactions each resolve their security_id
+      # through this metadata, so either one needs it; an account with holdings
+      # but no investment transactions is common.
+      securities = transactions.any? || holdings.any? ? investments_data.securities : []
 
       InvestmentsData.new(
         transactions: transactions,
@@ -102,8 +121,12 @@ class PlaidItem::AccountsSnapshot
       end
     end
 
+    # Not supports_product?: available_products only says the institution offers
+    # liabilities, and fetching it without consent fails the whole sync with
+    # ADDITIONAL_CONSENT_REQUIRED. consents_to_product? keeps the fork's fallback
+    # for items whose snapshot doesn't record consent, so no re-link is needed.
     def can_fetch_liabilities?
-      (plaid_item.supports_product?("liabilities") || plaid_item.consents_to_product?("liabilities")) &&
+      (plaid_item.consented_to_product?("liabilities") || plaid_item.consents_to_product?("liabilities")) &&
       accounts.any? do |a|
         # Plaid's `credit` type has two subtypes: "credit card" and "paypal".
         # Liabilities covers both, so match on the type rather than allow-listing
@@ -115,12 +138,39 @@ class PlaidItem::AccountsSnapshot
     end
 
     def liabilities_data
-      return nil unless can_fetch_liabilities?
       return @liabilities_data if defined?(@liabilities_data)
+      return nil unless can_fetch_liabilities?
 
-      @liabilities_data = fetch_product_data("liabilities") do
-        plaid_provider.get_item_liabilities(plaid_item.access_token)
-      end
+      # Once liabilities is billed, errors raise rather than clearing the
+      # liabilities already stored; until then it may still be initializing.
+      @liabilities_data =
+        if liabilities_billed?
+          plaid_provider.get_item_liabilities(plaid_item.access_token)
+        else
+          fetch_product_data("liabilities") do
+            plaid_provider.get_item_liabilities(plaid_item.access_token)
+          end
+        end
+    rescue Plaid::ApiError => e
+      error_code = plaid_error_code(e)
+      raise unless liabilities_unavailable?(error_code)
+
+      log_liabilities_unavailable(error_code)
+      @liabilities_data = nil
+    end
+
+    # Link records a liabilities consent even when Plaid can't add it: the
+    # issuer lacks it, or the user withheld the OAuth permission. Consent alone
+    # can't gate the call, so skip the data instead of failing the whole sync.
+    # Once liabilities was added to the Item, errors still raise rather than
+    # clearing the liabilities already stored.
+    def liabilities_unavailable?(error_code)
+      %w[PRODUCTS_NOT_SUPPORTED ACCESS_NOT_GRANTED NO_LIABILITY_ACCOUNTS].include?(error_code) &&
+        !liabilities_billed?
+    end
+
+    def liabilities_billed?
+      plaid_item.billed_products.map(&:to_s).include?("liabilities")
     end
 
     # Yields the Plaid API call and rescues transient "product not ready" errors,
@@ -156,5 +206,45 @@ class PlaidItem::AccountsSnapshot
       JSON.parse(error.response_body.to_s)
     rescue JSON::ParserError
       {}
+    end
+
+    def log_account_without_balance(account)
+      DebugLogEntry.capture(
+        category: "provider_sync",
+        level: "info",
+        message: "Skipped Plaid account without a balance",
+        source: self.class.name,
+        provider_key: "plaid",
+        family: plaid_item.family,
+        metadata: {
+          plaid_item_id: plaid_item.id,
+          plaid_account_id: account.account_id,
+          type: account.type,
+          subtype: account.subtype
+        }
+      )
+    end
+
+    def log_liabilities_unavailable(error_code)
+      DebugLogEntry.capture(
+        category: "provider_sync",
+        level: "info",
+        message: "Plaid liabilities unavailable for this item",
+        source: self.class.name,
+        provider_key: "plaid",
+        family: plaid_item.family,
+        metadata: {
+          plaid_item_id: plaid_item.id,
+          institution_id: plaid_item.institution_id,
+          error_code: error_code
+        }
+      )
+    end
+
+    def plaid_error_code(error)
+      body = JSON.parse(error.response_body.to_s)
+      body["error_code"] if body.is_a?(Hash)
+    rescue JSON::ParserError
+      nil
     end
 end

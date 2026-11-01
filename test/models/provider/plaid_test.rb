@@ -52,6 +52,7 @@ class Provider::PlaidTest < ActiveSupport::TestCase
     request = mock
     Plaid::LinkTokenCreateRequest.expects(:new).with do |params|
       params[:products] == [ "transactions" ] &&
+        params[:optional_products].nil? &&
         params[:additional_consented_products] == [ "investments" ]
     end.returns(request)
     @plaid.client.expects(:link_token_create).with(request).returns("response")
@@ -80,6 +81,25 @@ class Provider::PlaidTest < ActiveSupport::TestCase
       webhooks_url: "https://example.com/webhooks",
       redirect_url: @redirect_url,
       accountable_type: "CreditCard"
+    )
+  end
+
+  # Loans bill `transactions` alongside `liabilities` for the same reason as
+  # credit cards: transaction history syncs without a re-link.
+  test "bills liabilities and transactions for a loan link" do
+    request = mock
+    Plaid::LinkTokenCreateRequest.expects(:new).with do |params|
+      params[:products] == [ "liabilities", "transactions" ] &&
+        params[:optional_products].nil? &&
+        params[:additional_consented_products] == [ "investments" ]
+    end.returns(request)
+    @plaid.client.expects(:link_token_create).with(request).returns("response")
+
+    @plaid.get_link_token(
+      user_id: "test-user-id",
+      webhooks_url: "https://example.com/webhooks",
+      redirect_url: @redirect_url,
+      accountable_type: "Loan"
     )
   end
 
