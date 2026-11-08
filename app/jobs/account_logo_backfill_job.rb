@@ -12,6 +12,8 @@ class AccountLogoBackfillJob < ApplicationJob
   CURSOR_KEY = "account_logo_backfill_cursor"
 
   def perform(batch_size: BATCH_SIZE)
+    return unless Account::LogoFetcher.remote_lookups_enabled?
+
     cursor = Rails.cache.read(CURSOR_KEY)
     batch = accounts.where(cursor ? [ "accounts.id > ?", cursor ] : nil).limit(batch_size).to_a
     batch = accounts.limit(batch_size).to_a if batch.empty? && cursor

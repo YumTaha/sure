@@ -9,6 +9,8 @@ class AccountLogoFetchJob < ApplicationJob
   # nightly backfill and single domain changes share one queue. A claim lasts
   # until its slot has passed; a lone domain change usually fetches at once.
   def self.perform_paced(account)
+    return unless Account::LogoFetcher.remote_lookups_enabled?
+
     spacing = AccountLogoBackfillJob::SPACING.to_i
     now = Time.current.to_i
     # The next slot others claimed is only a hint where to start probing.
@@ -26,6 +28,7 @@ class AccountLogoFetchJob < ApplicationJob
   end
 
   def perform(account)
+    return unless Account::LogoFetcher.remote_lookups_enabled?
     return unless account.logo_auto_fetchable?
     return if Account::LogoFetcher.new(account).fetch(auto: true)
 

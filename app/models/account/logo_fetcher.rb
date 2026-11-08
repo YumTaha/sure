@@ -27,6 +27,17 @@ class Account::LogoFetcher
     end
   end
 
+  # Fork-only switch. Finding an icon means telling Google, DuckDuckGo, Yandex
+  # and the mobile app stores which institution this account belongs to, which
+  # is a disclosure of the family's banking relationships to third parties this
+  # instance otherwise never contacts. Upstream has no off switch, so the fork
+  # adds one and leaves it off: every lookup here is opt-in via
+  # ACCOUNT_LOGO_FETCH_ENABLED=true. Gated at this class rather than at the
+  # call sites so no later caller can reach the network around it.
+  def self.remote_lookups_enabled?
+    ENV["ACCOUNT_LOGO_FETCH_ENABLED"] == "true"
+  end
+
   attr_reader :account
 
   # The developer site is the institution's domain or one of its subdomains.
@@ -53,6 +64,7 @@ class Account::LogoFetcher
   # name, which anyone can choose, and it puts clients that read many of its
   # store pages behind a bot challenge.
   def candidates(for_picker: true)
+    return [] unless self.class.remote_lookups_enabled?
     return [] unless domain
     return search_candidates(for_picker:) unless for_picker
 
@@ -69,6 +81,7 @@ class Account::LogoFetcher
   # so later automatic fetches may replace it. Returns true when an icon was
   # attached.
   def fetch(source: nil, auto: false)
+    return false unless self.class.remote_lookups_enabled?
     return false unless domain
 
     fetched_for = domain

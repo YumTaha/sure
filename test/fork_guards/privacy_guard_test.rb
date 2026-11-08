@@ -12,6 +12,9 @@ require "test_helper"
 # the test environment every client below is inert anyway -- which is exactly
 # why a runtime-only check would prove nothing.
 class PrivacyGuardTest < ActiveSupport::TestCase
+  # For the logo-job guards below: asserts nothing gets enqueued.
+  include ActiveJob::TestHelper
+
   # Every known outbound telemetry/observability integration, and the ENV knob
   # that must gate it. Adding an entry here is a deliberate, reviewed act.
   #
@@ -204,6 +207,115 @@ class PrivacyGuardTest < ActiveSupport::TestCase
       "logtail.rb no longer disables Rack HTTP events. Those serialize raw headers and " \
       "query strings past Rails' filters, so re-enabling them would put credentials and " \
       "cookies into whatever log destination is configured.")
+  end
+
+  # --- Institution logo lookups (upstream #4141, merged 2026-11-08) ---
+  #
+  # Upstream added automatic account-icon fetching with no off switch. Finding an
+  # icon means sending the institution's domain to Google, DuckDuckGo and Yandex
+  # and its name to the Apple App Store, Google Play and RuStore -- for every
+  # account, on create, on domain change, and again nightly for any account
+  # without a logo. Plaid fills institution_domain in, so every account here
+  # would be looked up. That is not analytics, so the gem/initializer guards
+  # above do not see it, but it discloses which banks this family uses to
+  # parties this instance otherwise never contacts.
+  #
+  # The fork adds ACCOUNT_LOGO_FETCH_ENABLED and leaves it off. These tests are
+  # the tripwire: a sync that drops the gate, renames the switch, or flips the
+  # default fails here.
+  test "institution logo lookups are off unless explicitly enabled" do
+    with_env_overrides("ACCOUNT_LOGO_FETCH_ENABLED" => nil) do
+      assert_not Account::LogoFetcher.remote_lookups_enabled?,
+        "Institution logo lookups must default to OFF. With no ACCOUNT_LOGO_FETCH_ENABLED " \
+        "set, this instance would start telling Google, DuckDuckGo, Yandex and the app " \
+        "stores which banks the family uses."
+    end
+
+    # Only the exact string "true" opts in -- not "1", not "false", not any
+    # other truthy-looking value an operator might set by accident.
+    { "true" => true, "false" => false, "1" => false, "TRUE" => false, "" => false }.each do |value, expected|
+      with_env_overrides("ACCOUNT_LOGO_FETCH_ENABLED" => value) do
+        assert_equal expected, Account::LogoFetcher.remote_lookups_enabled?,
+          "ACCOUNT_LOGO_FETCH_ENABLED=#{value.inspect} should resolve to #{expected}."
+      end
+    end
+  end
+
+  test "disabled logo lookups make no outbound request" do
+    account = accounts(:depository)
+    account.update_column(:institution_domain, "chase.com")
+
+    # Any HTTP at all is a failure: this is the whole point of the switch.
+    Account::LogoFetcher::Client.any_instance.expects(:get).never
+    Account::LogoFetcher::Client.any_instance.expects(:json).never
+
+    with_env_overrides("ACCOUNT_LOGO_FETCH_ENABLED" => nil) do
+      fetcher = Account::LogoFetcher.new(account)
+
+      assert_equal [], fetcher.candidates,
+        "LogoFetcher#candidates must return nothing while lookups are disabled."
+      assert_equal [], fetcher.candidates(for_picker: false),
+        "The automatic path must return nothing while lookups are disabled."
+      assert_not fetcher.fetch(auto: true),
+        "LogoFetcher#fetch must refuse while lookups are disabled."
+      assert_not fetcher.fetch(source: "google"),
+        "An explicit source must not bypass the switch -- fetch(source:) reaches the " \
+        "network through icon_for, not through candidates."
+    end
+  end
+
+  test "disabled logo lookups keep both logo jobs inert" do
+    account = accounts(:depository)
+    account.update_column(:institution_domain, "chase.com")
+
+    with_env_overrides("ACCOUNT_LOGO_FETCH_ENABLED" => nil) do
+      Account::LogoFetcher.any_instance.expects(:fetch).never
+      AccountLogoFetchJob.new.perform(account)
+
+      # perform_paced must not enqueue, so a disabled instance never builds a
+      # backlog of jobs that would all fire if the switch were flipped later.
+      assert_no_enqueued_jobs(only: AccountLogoFetchJob) do
+        AccountLogoFetchJob.perform_paced(account)
+        AccountLogoBackfillJob.new.perform
+      end
+    end
+  end
+
+  # Proves the switch is the thing stopping the traffic, rather than the path
+  # being broken anyway -- a guard that passes for the wrong reason is worse
+  # than no guard, because it goes on passing after the gate is removed.
+  test "enabling logo lookups does reach the network" do
+    account = accounts(:depository)
+    account.update_column(:institution_domain, "chase.com")
+
+    requested = []
+    Account::LogoFetcher::Client.any_instance.stubs(:get).with { |url, **| requested << url; true }.returns(nil)
+    Account::LogoFetcher::Client.any_instance.stubs(:json).with { |url| requested << url; true }.returns(nil)
+
+    with_env_overrides("ACCOUNT_LOGO_FETCH_ENABLED" => "true") do
+      Account::LogoFetcher.new(account).candidates(for_picker: false)
+    end
+
+    assert requested.any? { |url| url.include?("chase.com") },
+      "With the switch on, no request carried the institution domain. The gate under " \
+      "test may no longer be what blocks these lookups -- re-check LogoFetcher before " \
+      "trusting the tests above."
+  end
+
+  test "every logo egress path still consults the switch" do
+    {
+      "app/models/account/logo_fetcher.rb"    => 2,
+      "app/jobs/account_logo_fetch_job.rb"    => 2,
+      "app/jobs/account_logo_backfill_job.rb" => 1
+    }.each do |path, expected|
+      source = Rails.root.join(path).read
+      found = source.scan(/remote_lookups_enabled\?/).size
+
+      assert_operator found, :>=, expected,
+        "#{path} has #{found} reference(s) to remote_lookups_enabled? but needs at least " \
+        "#{expected}. An upstream merge probably dropped a fork guard, which would silently " \
+        "re-enable institution logo lookups. Re-add the gate; do not lower this number."
+    end
   end
 
   private
