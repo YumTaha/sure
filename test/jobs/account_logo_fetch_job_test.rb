@@ -1,6 +1,13 @@
 require "test_helper"
 
 class AccountLogoFetchJobTest < ActiveJob::TestCase
+  # Fork: institution logo lookups are off unless ACCOUNT_LOGO_FETCH_ENABLED is
+  # set (see test/fork_guards/privacy_guard_test.rb for why). This file exercises
+  # the fetcher itself, so it opts the feature in. The guard tests cover the
+  # default, and assert the gate is still in place.
+  setup { ENV["ACCOUNT_LOGO_FETCH_ENABLED"] = "true" }
+  teardown { ENV.delete("ACCOUNT_LOGO_FETCH_ENABLED") }
+
   setup do
     @account = accounts(:depository)
     @account.update_columns(institution_domain: "tbank.ru")

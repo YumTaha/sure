@@ -1,6 +1,13 @@
 require "test_helper"
 
 class Account::LogoFetcherTest < ActiveSupport::TestCase
+  # Fork: institution logo lookups are off unless ACCOUNT_LOGO_FETCH_ENABLED is
+  # set (see test/fork_guards/privacy_guard_test.rb for why). This file exercises
+  # the fetcher itself, so it opts the feature in. The guard tests cover the
+  # default, and assert the gate is still in place.
+  setup { ENV["ACCOUNT_LOGO_FETCH_ENABLED"] = "true" }
+  teardown { ENV.delete("ACCOUNT_LOGO_FETCH_ENABLED") }
+
   GOOGLE_URL = "https://www.google.com/s2/favicons?domain=tbank.ru&sz=256"
   DUCKDUCKGO_URL = "https://icons.duckduckgo.com/ip3/tbank.ru.ico"
   YANDEX_URL = "https://favicon.yandex.net/favicon/v2/tbank.ru?size=120"
