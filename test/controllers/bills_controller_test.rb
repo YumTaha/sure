@@ -429,10 +429,13 @@ class BillsControllerTest < ActionDispatch::IntegrationTest
   # Paid after the month turned, the same bill dropped out of the month it was
   # snoozed into, because the query still went by the date it was moved from.
   test "a bill snoozed into next month and paid there stays listed there" do
-    skip "Upstream bug (see fork LESSONS.md 2026-11-01): reproduces identically on a clean origin/main worktree, so it is not caused by this fork. Re-check each sync and remove this skip once upstream fixes it."
     travel_to Date.current.end_of_month - 2.days
     occurrence = snoozed_late_bill
     travel_to occurrence.reload.effective_due_on - 2.days
+    # Run in the first days of a month, this lands more than
+    # Session::INACTIVITY_TIMEOUT after setup signed in, with no request in
+    # between to keep the session alive; the user would sign in again.
+    sign_in @user
     pay(occurrence)
 
     get bills_url
