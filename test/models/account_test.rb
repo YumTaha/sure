@@ -1,6 +1,12 @@
 require "test_helper"
 
 class AccountTest < ActiveSupport::TestCase
+  # Fork: institution logo lookups are off unless ACCOUNT_LOGO_FETCH_ENABLED is
+  # set (see test/fork_guards/privacy_guard_test.rb). Some tests here assert the
+  # fetch job is enqueued on a domain change, so this file opts the feature in.
+  setup { ENV["ACCOUNT_LOGO_FETCH_ENABLED"] = "true" }
+  teardown { ENV.delete("ACCOUNT_LOGO_FETCH_ENABLED") }
+
   include SyncableInterfaceTest, EntriesTestHelper, ActiveJob::TestHelper
 
   setup do
