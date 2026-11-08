@@ -78,7 +78,6 @@ class ReportsTest < ApplicationSystemTestCase
   end
 
   test "following a link while a section is held saves its new place first" do
-    skip "Upstream bug (see fork LESSONS.md 2026-11-01): reproduces identically on a clean origin/main worktree, so it is not caused by this fork. Re-check each sync and remove this skip once upstream fixes it."
     keys = all("section[data-section-key]").map { |section| section["data-section-key"] }
     moved = "transactions_breakdown"
     above = keys[keys.index(moved) - 1]

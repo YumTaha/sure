@@ -139,7 +139,6 @@ class ReportsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "spending vs normal is a preview section" do
-    skip "Upstream bug (see fork LESSONS.md 2026-11-01): reproduces identically on a clean origin/main worktree, so it is not caused by this fork. Re-check each sync and remove this skip once upstream fixes it."
     @user.update!(preferences: (@user.preferences || {}).merge("preview_features_enabled" => false))
     get reports_path
     assert_select "section[data-section-key='spending_vs_normal']", count: 0
