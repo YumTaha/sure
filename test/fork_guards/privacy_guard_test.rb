@@ -23,6 +23,10 @@ class PrivacyGuardTest < ActiveSupport::TestCase
   # ~/docker-apps/sure/.env and the x-rails-env anchor of compose.yml).
   KNOWN_TELEMETRY = {
     "posthog-ruby"  => { initializer: "posthog.rb",  env: %w[POSTHOG_KEY POSTHOG_FEEDBACK_ENABLED] },
+    # Upstream moved the Gemfile entry to posthog-rails (2026-11, pulls
+    # posthog-ruby in). Only safe while it stays `require: false`: its railtie
+    # would otherwise auto-capture exceptions. Enforced by a test below.
+    "posthog-rails" => { initializer: "posthog.rb",  env: %w[POSTHOG_KEY POSTHOG_FEEDBACK_ENABLED] },
     "sentry-ruby"   => { initializer: "sentry.rb",   env: %w[SENTRY_DSN] },
     "sentry-rails"  => { initializer: "sentry.rb",   env: %w[SENTRY_DSN] },
     "sentry-sidekiq" => { initializer: "sentry.rb",  env: %w[SENTRY_DSN] },
@@ -132,15 +136,72 @@ class PrivacyGuardTest < ActiveSupport::TestCase
   # tracer_provider assignment would read OTEL_EXPORTER_OTLP_ENDPOINT and could
   # start exporting spans with no Langfuse key set at all -- bypassing the gate
   # every other check in this file relies on.
+  #
+  # One exception, reviewed 2026-11-15: upstream's AI "metadata" tracing mode
+  # sets the global tracer provider, but only from Ai::Instrumentation's
+  # :metadata branch, which needs OTLP_ENDPOINT set. The tests after this one
+  # pin that gate; preflight-privacy.sh refuses a deploy with OTLP_ENDPOINT set.
+  OTEL_GLOBAL_ALLOWED = %w[app/models/ai/instrumentation/metadata_tracing.rb].freeze
+
   test "OpenTelemetry is never configured globally" do
     offenders = Dir[Rails.root.join("{app,lib,config}/**/*.rb")].select do |file|
       File.read(file).match?(/OpenTelemetry::SDK\.configure|OpenTelemetry\.tracer_provider\s*=|use_all\b/)
     end
 
-    assert_empty offenders.map { |f| f.sub("#{Rails.root}/", "") },
+    assert_empty offenders.map { |f| f.sub("#{Rails.root}/", "") } - OTEL_GLOBAL_ALLOWED,
       "OpenTelemetry is configured globally. It must only be instantiated inside the " \
       "LANGFUSE_* guard in config/initializers/langfuse.rb. A global setup reads " \
       "OTEL_EXPORTER_OTLP_ENDPOINT and can transmit without any Langfuse key being set."
+  end
+
+  test "AI metadata tracing stays off unless OTLP_ENDPOINT is set" do
+    assert_equal :off, Ai::Instrumentation.mode(env: {}),
+      "AI tracing must default to :off. With no OTLP_ENDPOINT and no Langfuse keys, " \
+      "this instance would start exporting AI spans somewhere."
+    assert_equal :off, Ai::Instrumentation.mode(env: { "OTEL_EXPORTER_OTLP_ENDPOINT" => "https://x.example" }),
+      "The standard OTEL_* variable must not switch tracing on by itself."
+
+    # Proves the gate is what keeps it off, not a path that is broken anyway.
+    assert_equal :metadata, Ai::Instrumentation.mode(env: { "OTLP_ENDPOINT" => "https://x.example" }),
+      "OTLP_ENDPOINT no longer selects metadata mode -- upstream renamed the gate. Re-check " \
+      "Ai::Instrumentation and update preflight-privacy.sh to refuse the new variable."
+
+    before = OpenTelemetry.tracer_provider
+    Ai::Instrumentation::MetadataTracing.expects(:enable).never
+    Ai::Instrumentation.start_tracing!(env: {})
+    assert_same before, OpenTelemetry.tracer_provider,
+      "start_tracing! replaced the global tracer provider with no OTLP_ENDPOINT set."
+  end
+
+  test "the global tracer is only built from the OTLP_ENDPOINT-gated branch" do
+    callers = Dir[Rails.root.join("{app,lib,config}/**/*.rb")].select do |file|
+      File.read(file).match?(/MetadataTracing\.enable\b/)
+    end.map { |f| f.sub("#{Rails.root}/", "") }
+
+    assert_equal [ "app/models/ai/instrumentation.rb" ], callers,
+      "MetadataTracing.enable is now called from #{callers.inspect}. Only Ai::Instrumentation's " \
+      ":metadata branch (gated on OTLP_ENDPOINT) may set the global tracer provider."
+  end
+
+  # posthog-rails ships a railtie that captures exceptions (and can instrument
+  # requests) as soon as it is loaded. Upstream declares it `require: false`
+  # and loads only the core client from posthog.rb, which is what keeps it
+  # behind POSTHOG_KEY / POSTHOG_FEEDBACK_ENABLED.
+  test "posthog-rails is never auto-loaded" do
+    gemfile = Rails.root.join("Gemfile").read
+    entry = gemfile[/^\s*gem\s+["']posthog-rails["'].*$/]
+    if entry
+      assert_match(/require:\s*false/, entry,
+        "posthog-rails is no longer `require: false` in the Gemfile, so its railtie loads " \
+        "on boot and can send exceptions to PostHog. Restore `require: false`.")
+    end
+
+    offenders = Dir[Rails.root.join("{app,lib,config}/**/*.rb")].select do |file|
+      File.read(file).match?(%r{require\s+["']posthog[-/]rails|PostHog::Rails})
+    end
+    assert_empty offenders.map { |f| f.sub("#{Rails.root}/", "") },
+      "Something loads posthog-rails explicitly. Its railtie auto-captures exceptions -- " \
+      "confirm it is gated before allowlisting."
   end
 
   test "no OpenTelemetry auto-instrumentation gem is present" do
