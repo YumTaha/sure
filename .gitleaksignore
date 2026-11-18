@@ -31,3 +31,11 @@ test/models/trade_republic_client_test.rb:generic-api-key:906
 # Test placeholder tokens ("old-access" / "old-refresh") in an upstream
 # TrueLayer model test, not a credential.
 test/models/truelayer_item_test.rb:generic-api-key:7
+
+# --- Added 2026-11-15 (auto-sync) ---
+# Fake model answer ("NETFLIX-CHARGE-15.49") used to prove AI tracing spans
+# carry no content, in an upstream test. Not a credential.
+test/models/ai/instrumentation/metadata_tracing_test.rb:generic-api-key:8
+# German UI placeholder text ("Trading-212-Secret-Key einfügen" = "paste your
+# Trading 212 secret key"), not a credential.
+config/locales/views/settings/providers/de.yml:generic-api-key:272
