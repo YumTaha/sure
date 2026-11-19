@@ -105,17 +105,27 @@ jobs:
       - name: Lint/Format js code
         run: npm run lint
 
-  # The unit tests already use every CPU of a runner, so they are split by
-  # file across two runners.
+  # Fork: ONE shard, not upstream's two. Sharding trades total runner time for
+  # wall-clock, because every shard repeats bundle install, the database setup
+  # and the asset build. Measured on this repo: 44.7 runner-minutes sharded
+  # (2 unit + 3 system) against 28.7 unsharded, a 56% increase for the same
+  # tests. GitHub automatically disables workflows on a FORK that uses a
+  # significant amount of GitHub-hosted runner time, and it has already done
+  # that here twice (2026-10-14 and 2026-11-12; GitHub Support ticket
+  # 5024902), with about half the fork's runner time coming from this workflow
+  # on the weekly upstream-sync pull requests. Wall-clock does not matter for
+  # an unattended sync; staying enabled does. Keep this at one shard and keep
+  # the timeout below, which upstream's sharding removed the need for.
   test_unit_shard:
     name: test_unit (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Unsharded unit runs measured 9.9 min and the suite keeps growing.
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2 ]
+        shard: [ 1 ]
 
     env:
       PLAID_CLIENT_ID: foo
@@ -234,16 +244,18 @@ jobs:
           [ "$RESULT" = "success" ]
 
   # System tests run serially (they flake when parallel workers compete for
-  # the runner's CPUs), so they are split by file across several runners.
+  # the runner's CPUs). Fork: ONE shard, not upstream's three -- see the unit
+  # job above for why total runner time matters more than wall-clock here.
   test_system_shard:
     name: test_system (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Unsharded system runs measured 12.4 min; headroom for a serial suite.
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 1, 2, 3 ]
+        shard: [ 1 ]
 
     env:
       PLAID_CLIENT_ID: foo
